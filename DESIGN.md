@@ -55,7 +55,7 @@ on a refusal.
 | `serializeInt128(h, min, max)` | `Int128` | int128 |
 | `serializeFixed64(h, integerBits, fractionBits, min, max)` | `Int64` raw | fixed |
 | `serializeFixed128(h, integerBits, fractionBits, min, max)` | `Int128` raw | fixed |
-| `serializeFixedNumber(h, min, max)` | number | fixed, Q48.16 |
+| `serializeFixedNumber(h, min, max)` | number; max at most 2^47 - 1 whole units | fixed, Q48.16 |
 | `serializeIntRelative(previous, h)` | number | int_relative |
 | `serializeFloat(h)`, `serializeDouble(h)` | number, across the boundary | float, double |
 | `serializeFloatBits(h)` | binary32 bits, a number | float |

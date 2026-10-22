@@ -222,6 +222,18 @@ function T.TestFixedNumberIsQ48_16()
 	b:flush()
 	check(buffer.tostring(a:data()) == buffer.tostring(b:data()), "the same wire")
 	check(a:bitsProcessed() == 21, "[-10,10] in Q48.16 is 21 bits, got " .. a:bitsProcessed())
+	-- an unsigned Q48.16 holds whole units to 2^48 - 1, past every moo number:
+	-- such bounds are misuse, or raw 2^63 + 65536 (bytes below) would read back
+	-- as a negative number inside [0, max]
+	raises(function()
+		serialize.ReadStream.new(buffer.fromstring("\x00\x00\x01\x00\x00\x00\x00\x80")):serializeFixedNumber({ value = 0 }, 0, Int64.parse("281474976710655"))
+	end, "serializeFixedNumber max must be at most 2^47 - 1")
+	-- at the widest legal bounds, [0, 2^47 - 1], the field is 63 bits and an
+	-- offset of 2^63 - 1 is past the range: refused, the holder untouched
+	local r = serialize.ReadStream.new(buffer.fromstring("\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x7F"))
+	local h = { value = 777 }
+	check(r:serializeFixedNumber(h, 0, Int64.parse("140737488355327")) == false and h.value == 777, "a raw past the range is refused")
+	check(r:error() == serialize.SerializeError.ValueOutOfRange, "refused as out of range")
 end
 
 -- strings: the reader refuses NUL and malformed UTF-8 the way Go's utf8.Valid

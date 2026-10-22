@@ -491,10 +491,18 @@ Shared.serializeFixed64 = fixedMethod(Int64, 2, "serializeFixed64")
 Shared.serializeFixed128 = fixedMethod(Int128, 4, "serializeFixed128")
 
 -- serializeFixedNumber(h, min, max): a moo number as fixed point Q48.16, its
--- own representation, over [min, max] whole units: the wire of
--- serializeFixed64(raw, 48, 16, min, max), exact both ways. A read whose raw
+-- own representation, over [min, max] whole units (max at most 2^47 - 1):
+-- the wire of serializeFixed64(raw, 48, 16, min, max), exact both ways. A read whose raw
 -- value is -2^63 (the one Q48.16 pattern with no moo number) is refused.
+local MAX_NUMBER_UNITS = { 4294967295, 32767 } -- 2^47 - 1 whole units, the largest moo integer
+
 function Shared.serializeFixedNumber(self: any, h: any, min: any, max: any): boolean
+	-- the bounds must be moo numbers: an unsigned Q48.16 holds whole units to
+	-- 2^48 - 1, whose raw values past 2^63 have no moo number (and would read
+	-- back as negative numbers)
+	if Wide.cmpS(wideArg(Int64, max, "serializeFixedNumber", "max"), MAX_NUMBER_UNITS, 2) > 0 then
+		error("serialize: serializeFixedNumber max must be at most 2^47 - 1 whole units, the largest moo integer", 2)
+	end
 	local raw: any = nil
 	if self._kind ~= "read" then
 		need(type(h.value) == "number", "serializeFixedNumber", "value", "a number")
