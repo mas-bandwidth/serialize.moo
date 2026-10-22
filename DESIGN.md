@@ -6,21 +6,33 @@ whose numbers are Q48.16 fixed point. It is the bottom layer under the schema
 port to moo, the way serialize.luau is under schema's Luau leg.
 
 **The reference.** serialize (C++, `serialize.h`) and its standard,
-`STANDARD.md` format 1.1. serialize.go is the closest worked reference and
+`STANDARD.md` format 2.0. serialize.go is the closest worked reference and
 supplies the order of every check, the panic texts and the 128-bit
 semantics. serialize.luau (branch `sprint/serialize-luau`) supplies the shape
 of a script port: the holders, the streams, the runner. All are read, never
 imported.
 
-**The vendored standard.** `STANDARD.md`, `conformance/*.txt` and
-`conformance-controls/*.txt` are VERBATIM copies of mas-bandwidth/serialize at
-tag v1.17.0 (`56a1b590af814474b56ff72b0d05d4be4d7cf41b`). CI diffs them against
-the tag; a change arrives by re-vendoring from a new tag.
+**The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
+and `conformance-controls/` (the unknown-operation control and the 15
+`*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
+v2.0.0 (merge `8dae4cc08b7b46c9b5fcf08dad5e99ad1348b76b`; the standard and the
+corpus at `dedf58efa93832fd243dbf3a2a1ca0a91c46b14b`). CI diffs them against
+the tag; a change arrives by re-vendoring from a new tag with
+`tools/revendor.sh <tag>`.
+
+**Format 2.0.** The wire carries only integers and bytes, and every value has
+exactly one encoding (STANDARD.md, Format version). Against 1.1: `float` and
+`double` carry finite values only; a `compressed_float` decode that is not
+finite is refused; `int_relative`'s absolute tier is canonical; `end` is new;
+`wstring` is gone; and every refusal names its reason. Every finite value 1.1
+could carry keeps its exact bytes.
 
 **The moo pin.** moo main at `f04c4cce3ab608caf39e36d7941fcb5bb09157dd`
 (2026-10-21, PR #33 merged): layer 3 (number = Q48.16), layer 4 (the math
 library) and layer 5 (conformance) are on it. The layer 3b stack (vec3, quat,
-transform; PRs #34 to #40) is not, and nothing here needs it. `make dist-moo`
+transform, the saturating fixed point; PRs #34 to #40, merged to moo main by
+2026-10-22 at `35b4a40`) is not, and nothing here needs it, so the format 2.0
+port keeps this pin. `make dist-moo`
 builds `moo` and `moo-analyze` from that commit and refuses any other.
 
 ## The API
@@ -33,8 +45,8 @@ on a refusal.
 
 | entry | what |
 |---|---|
-| `FORMAT_VERSION` | `"1.1"` |
-| `SerializeError` | `Overflow`, `ValueOutOfRange`, `Align`: the latched kinds |
+| `FORMAT_VERSION` | `"2.0"` |
+| `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`; `stream:error()` returns one |
 | `WriteStream.new(buffer)`, `ReadStream.new(buffer)`, `MeasureStream.new()` | the streams |
 | `Continue(stream, holder)`, `Until(stream, holder)` | sentinel loops that end on hostile data |
 | `BitWriter`, `BitReader` | the bitpacker |
@@ -58,15 +70,15 @@ on a refusal.
 | `serializeFixedNumber(h, min, max)` | number; max at most 2^47 - 1 whole units | fixed, Q48.16 |
 | `serializeIntRelative(previous, h)` | number | int_relative |
 | `serializeFloat(h)`, `serializeDouble(h)` | number, across the boundary | float, double |
-| `serializeFloatBits(h)` | binary32 bits, a number | float |
-| `serializeDoubleBits(h)` | binary64 bits, a `Uint64` | double |
+| `serializeFloatBits(h)` | finite binary32 bits, a number | float |
+| `serializeDoubleBits(h)` | finite binary64 bits, a `Uint64` | double |
 | `serializeCompressedFloat(h, min, max, res)` | number, across the boundary | compressed_float |
 | `serializeCompressedFloatBits(h, min, max, res)` | binary32 bits | compressed_float |
 | `serializeCompressedFloatPrecomputed[Bits](h, maxIntegerValue, bits, delta, min)` | as above | compressed_float |
 | `serializeBytes(buffer[, offset, count])` | the buffer | bytes |
-| `serializeString(h, bufferSize)` | string (bytes) | string |
-| `serializeWideString(h, bufferSize)` | string (UTF-8) | wstring |
+| `serializeString(h, bufferSize)` | string (well-formed UTF-8, no zero byte) | string |
 | `serializeAlign()` | | align |
+| `serializeEnd()` | | end |
 | `serializeObject(object)` | a table with `serialize(self, stream)` | object |
 
 Every stream also has `reset`, `isWriting`, `isReading`, `error`, `ok`,
@@ -82,7 +94,24 @@ Misuse raises, naming the rule, with serialize.go's panic text, before
 anything else and even on a stream with a latched error. A value of a type
 serialize.go's parameter could not hold raises `serialize: <method> <name>
 must be <type>`. A value the type holds but the operation refuses latches,
-exactly where serialize.go latches.
+exactly where serialize.go latches: past the buffer's end as `past_end`, a
+value outside its range as `value_out_of_range`, a non-finite float or double
+pattern as `non_finite_float`. moo has no assertion-off build, so the writer
+checks of IMPLEMENTING.md ("The check model") always run: a `serializeString`
+value that is not well-formed UTF-8 or holds a zero byte raises, as does a
+non-finite `compressed_float` value or a declaration whose top decode is not
+finite (below).
+
+**Refusals and end.** `stream:error()` is the FIRST refusal's reason, from
+`Refusal`; every later call on a failed stream fails with it, consuming
+nothing (STANDARD.md, Refusal reasons). A packet reader calls `serializeEnd()`
+after the last field of the top-level object: it refuses a whole byte left
+over as `trailing_data`, then a set bit in the final byte's padding as
+`nonzero_padding`, and leaves `bitsProcessed()` at 8 times the byte count. A
+write's or a measure's end emits nothing. `serializeObject` latches the
+object's own error value when its `serialize` returns `false` and one (the
+string `"object"` when none is given): that is the caller's error, not a
+refusal of the format.
 
 ## The number model
 
@@ -116,13 +145,13 @@ reached through `buffer.readf32`/`readf64`/`writef32`/`writef64`:
 
 - **Wire to number** (a read): the exact IEEE value x becomes the number whose
   raw value is round(x * 2^16), to nearest, **ties to even**. -0 and every
-  |x| <= 2^-17 become 0 (2^-17 itself is a tie, to even). It is **refused**,
-  with `ValueOutOfRange`, the holder untouched and the stream terminal, when x
-  is NaN, +inf or -inf, or the rounded raw value is outside
-  [-(2^63 - 1), 2^63 - 1] (|x| at or past about 2^47). STANDARD.md lets a
-  reader accept what it can read unambiguously and refuse what it cannot
-  represent; a NaN or an infinity has no moo number, so it is refused rather
-  than mapped to one (security trumps Postel: a NaN read as 0 hides a bug).
+  |x| <= 2^-17 become 0 (2^-17 itself is a tie, to even). A NaN or an infinity
+  never reaches the boundary: format 2.0 refuses it first, as
+  `non_finite_float`. A finite x is **refused**, as `value_out_of_range`, the
+  holder untouched and the stream terminal, when the rounded raw value is
+  outside [-(2^63 - 1), 2^63 - 1] (|x| at or past about 2^47): the corpus
+  accepts it, and moo has no number for it, so the number form refuses rather
+  than saturating; the Bits form carries it.
 - **Number to wire** (a write): the binary32 / binary64 nearest raw / 2^16,
   **ties to even**. Every moo number is a finite normal float, so a write
   never fails; 0 is +0.
@@ -132,10 +161,17 @@ computes it with the hardware (ldexp, nearbyint in the default rounding mode,
 the int64 to float conversions), on edges and 16,000 seeded cases each way,
 through the streams themselves (`test/boundary`).
 
-A value the boundary cannot carry still travels: the **Bits forms**
+A finite value the boundary cannot carry still travels: the **Bits forms**
 (`serializeFloatBits`, `serializeDoubleBits`, `serializeCompressedFloatBits`)
-move the IEEE pattern itself, every pattern byte for byte, NaN payloads
-included, so a moo program can relay what it cannot represent.
+move the IEEE pattern itself, byte for byte: -0, the subnormals and the values
+past 2^47, which STANDARD.md requires a reader to return bit exact
+(float-negative-zero, double-smallest-positive-denormal, float-largest-finite
+and their neighbours) and no moo number can hold. Under format 2.0 they carry
+**finite patterns only**: a pattern whose exponent field is all ones is refused
+on read as `non_finite_float`, tested on the raw bits before the holder is
+written, and latched as `non_finite_float` on write and measure, as
+serialize.go's writer does. Under 1.1 they also relayed NaN payloads and the
+infinities; that is gone, and no non-finite pattern travels through any form.
 
 ## Float32 arithmetic
 
@@ -157,9 +193,15 @@ the C compiler's float32 arithmetic (`-ffp-contract=off`, `FLT_EVAL_METHOD`
 0).
 
 A non-finite value on a compressed float write (only the Bits form can carry
-one) raises `serialize: compressed float value must be finite`, as the Luau,
-Lua and Squirrel ports do, for STANDARD.md's ruling that such input is
-non-conforming.
+one) raises `serialize: compressed float value must be finite`, for
+IMPLEMENTING.md's check model. A declaration whose top integer decodes to a
+value that is not finite (`min + delta`, rounded once in float32) is
+non-conforming as a whole, so a write on it raises `serialize: compressed
+float declaration decodes its top integer to a value that is not finite`
+(serialize.go's text), even for a value that would decode finite; only the
+writer checks the declaration. A reader refuses a non-finite decode itself as
+`non_finite_float`, the holder untouched, whatever the declaration: over
+`[3 * 2^103, FLT_MAX]` at resolution `2^104` the top integer decodes to +inf.
 
 ## Bit order
 
@@ -171,20 +213,36 @@ of its 8-byte word, as the 64-bit store does. A value wider than 32 bits is
 written low 32 bits first; a 128-bit value low half first. The reader reads
 byte by byte and never touches a byte past the data's end.
 
+**The buffer contract** (IMPLEMENTING.md): a ReadStream takes the packet's
+bytes exactly, with no slack, because it reads byte by byte; the conformance
+harness therefore presents each vector's bytes and nothing after them, and
+`serializeEnd` refuses anything past the object. A WriteStream's buffer is a
+multiple of 8 bytes; `data()` returns the `bytesProcessed()` bytes of the
+packet.
+
 ## Writer and reader
 
 **The writer is strict:** serialize.go's bytes for the same values; it latches
 where serialize.go's WriteStream returns an error and writes nothing on a
 refusal (every bounds check covers the whole operation before a bit moves).
 
-**The reader refuses** everything STANDARD.md and serialize.go refuse: past the
-end, a value outside its range, an offset outside its range, nonzero align
-padding, an int_relative outside [0, 2147483647] or not above previous, a
-string with a NUL or malformed UTF-8 (Go's `utf8.Valid`, hand-written), a wide
-string group above 0xFFFF, a zero group or an unpaired surrogate; and, moo's
-own, an IEEE value the boundary has no number for (number forms only). It
-forgives trailing bits, as STANDARD.md does. A refused read leaves its holder
-unwritten and the stream terminal. Hostile bytes never raise.
+**The reader refuses** everything STANDARD.md and serialize.go refuse, each
+for its reason: past the end (`past_end`); an offset outside its range, a
+string length past its buffer, a compressed integer past its maximum, an
+int_relative outside [0, 2147483647] or not above previous
+(`value_out_of_range`); set align padding, also the align inside bytes and
+string, checked before the payload's length (`nonzero_padding`); a float or
+double that is NaN or an infinity, or a compressed float decode that is not
+finite (`non_finite_float`); a string with a zero byte (`embedded_nul`),
+checked over the whole payload BEFORE its UTF-8 (`invalid_utf8`, Go's
+`utf8.Valid`, hand-written); an int_relative absolute tier carrying a
+difference a bounded tier takes (`non_canonical`, after the domain rule); at
+the end, a whole byte left over (`trailing_data`) and then set padding
+(`nonzero_padding`); and, moo's own, a finite IEEE value the boundary has no
+number for (number forms only, `value_out_of_range`). A string read checks the
+claimed length against the bytes that remain before it reads any. A refused
+read leaves its holder unwritten and the stream terminal. Hostile bytes never
+raise.
 
 ## Loading
 
@@ -214,6 +272,20 @@ control loads it through `../` and sees it raise).
   fails the run: never a skip.
 - Unit tests use no real time, no sockets, no network and no outside
   services.
+- The conformance runner checks every refused vector's stated reason against
+  the stream's first refusal, parses `writer_input`, runs `end` alone and as a
+  step, and requires vector names unique across the corpus; a refusal with no
+  reason or an unknown one is a malformed vector, red. `wstring` is an unknown
+  operation now, red like any other.
+- **Negative controls.** `test/conformance/controls.txt` holds one block per
+  rule: a needle in `src/serialize_stream.moo` and the patch that deletes the
+  rule, serialize.go's and the C++ reference's controls in moo. For each,
+  `tools/moorun` builds `build/run/conformance.<rule>/` with the needle (which
+  must occur exactly once) replaced, and runs the corpus there in control mode:
+  the vectors that fail must be EXACTLY `conformance-controls/<rule>.expected`.
+  A full run also fails when a vendored `.expected` list has no control. These
+  are the reversed witnesses of every 2.0 rule: each is the rule's old
+  behaviour planted back. Nothing of a control ships.
 - CI runs on the fleet's self-hosted runners only; `tools/check-ci.sh` refuses
   a GitHub-hosted `runs-on`.
 

@@ -68,7 +68,13 @@ function T.TestBoundaryAgainstTheCOracle()
 			if b == "refused" then
 				counts.refused += 1
 				check(not ok, line .. ": the boundary accepted bits it must refuse, as " .. tostring(value))
-				check(err == serialize.SerializeError.ValueOutOfRange, line .. ": refused with " .. tostring(err))
+				-- format 2.0: a non-finite pattern is refused by the format itself
+				-- (non_finite_float); a finite value with no moo number by the
+				-- boundary (value_out_of_range)
+				local hiBits = if double then tonumber(string.sub(a :: string, 1, 8), 16) :: number else tonumber(a, 16) :: number
+				local exponent = if double then 0x7FF00000 else 0x7F800000
+				local want = if bit32.band(hiBits, exponent) == exponent then serialize.Refusal.NonFiniteFloat else serialize.Refusal.ValueOutOfRange
+				check(err == want, line .. ": refused with " .. tostring(err) .. ", want " .. want)
 				check(value == 777, line .. ": the refusal wrote its destination")
 			else
 				local want = numberOfRaw(b :: string)
@@ -105,10 +111,12 @@ function T.TestBoundaryWitnesses()
 	-- 0.1f is not a moo number: it rounds to 6554 units
 	ok, v = readFloat(le32(0x3DCCCCCD), false)
 	check(ok and v == 6554 / 65536, "0.1f reads as 6554 units")
-	-- NaN, infinity and 2^47 are refused, not clamped or zeroed
-	for _, bits in { 0x7FC00000, 0x7F800000, 0xFF800000, 0x57000000 } do
-		ok, v = readFloat(le32(bits), false)
-		check(not ok and v == 777, string.format("0x%08X must be refused", bits))
+	-- NaN, infinity and 2^47 are refused, not clamped or zeroed: the first
+	-- three by the format, 2^47 by the boundary
+	for _, case in { { 0x7FC00000, "non_finite_float" }, { 0x7F800000, "non_finite_float" }, { 0xFF800000, "non_finite_float" }, { 0x57000000, "value_out_of_range" } } do
+		local err
+		ok, v, err = readFloat(le32(case[1]), false)
+		check(not ok and v == 777 and err == case[2], string.format("0x%08X must be refused as %s, got %s", case[1], case[2], tostring(err)))
 	end
 	-- 1/3 as a number writes the float nearest it, not the float of 1/3
 	local third = 1 / 3 -- 21845 units

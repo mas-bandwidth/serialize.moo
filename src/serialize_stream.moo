@@ -1,7 +1,7 @@
 --!strict
 -- serialize_stream.moo -- the three streams, WriteStream, ReadStream and
 -- MeasureStream (DESIGN.md, "The API" and "Writer and reader"), wire compatible
--- with serialize (STANDARD.md, format version 1.1) and serialize.go.
+-- with serialize (STANDARD.md, format version 2.0) and serialize.go.
 --
 -- Every serialize method exists on every stream, and one function implements
 -- each method for all three, branching on the stream's kind exactly where
@@ -11,10 +11,11 @@
 -- check of the whole width, then the bits; a read assigns its holder last.
 --
 -- The writer is STRICT: serialize.go's bytes for the same values. A reader
--- refuses everything STANDARD.md and serialize.go refuse, and one thing more
--- that only a moo reader can meet: an IEEE value with no moo number (the float
--- boundary, DESIGN.md). Hostile bytes never raise; a raise is API misuse,
--- decided by the caller's own arguments.
+-- refuses everything STANDARD.md and serialize.go refuse, each refusal naming
+-- its reason from STANDARD.md's closed list (Refusal), and one thing more that
+-- only a moo reader can meet: a finite IEEE value with no moo number (the
+-- float boundary, DESIGN.md), refused as value_out_of_range. Hostile bytes
+-- never raise; a raise is API misuse, decided by the caller's own arguments.
 --
 -- Copyright © 2016 - 2026, Más Bandwidth LLC. BSD 3-Clause (see LICENSE).
 
@@ -29,13 +30,30 @@ local Uint64, Int64, Uint128, Int128 = Wide.Uint64, Wide.Int64, Wide.Uint128, Wi
 
 export type Holder<T> = { value: T }
 
-local SerializeError = table.freeze({
-	Overflow = "overflow",
+-- The refusal reasons (STANDARD.md, Refusal reasons): a closed list, spelled
+-- exactly as every implementation spells them. A stream latches the FIRST
+-- refusal's reason; later refusals on a failed stream are its echoes. A write
+-- latches past_end when the buffer is full, value_out_of_range for a value
+-- outside the range it is serialized with, and non_finite_float for a float
+-- or double bit pattern that is NaN or an infinity, as serialize.go's writer.
+local Refusal = table.freeze({
+	PastEnd = "past_end",
 	ValueOutOfRange = "value_out_of_range",
-	Align = "align",
+	NonzeroPadding = "nonzero_padding",
+	TrailingData = "trailing_data",
+	NonFiniteFloat = "non_finite_float",
+	InvalidUtf8 = "invalid_utf8",
+	EmbeddedNul = "embedded_nul",
+	NonCanonical = "non_canonical",
 })
-local OVERFLOW = SerializeError.Overflow
-local RANGE = SerializeError.ValueOutOfRange
+local PAST_END = Refusal.PastEnd
+local RANGE = Refusal.ValueOutOfRange
+local NONZERO_PADDING = Refusal.NonzeroPadding
+local TRAILING_DATA = Refusal.TrailingData
+local NON_FINITE = Refusal.NonFiniteFloat
+local INVALID_UTF8 = Refusal.InvalidUtf8
+local EMBEDDED_NUL = Refusal.EmbeddedNul
+local NON_CANONICAL = Refusal.NonCanonical
 
 -- serialize.go's panic texts (serialize.go, the panic constants).
 local RAISE_BITS_RANGE = "serialize: bits must be in [1,32]"
@@ -48,6 +66,8 @@ local RAISE_BUFFER_SIZE = "serialize: string buffer size must be in [1,1<<31)"
 local RAISE_FLOAT_PARAMS = "serialize: compressed float requires min < max and resolution > 0"
 local RAISE_PRECOMPUTED = "serialize: precomputed compressed float constants must be exactly what CompressedFloatParams derives"
 local RAISE_NOT_FINITE = "serialize: compressed float value must be finite"
+local RAISE_COMPRESSED_DECODE = "serialize: compressed float declaration decodes its top integer to a value that is not finite"
+local RAISE_STRING_TEXT = "serialize: serializeString value must be well-formed UTF-8 with no zero byte"
 local RAISE_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes"
 local RAISE_NOT_AN_OBJECT = "serialize: serializeObject requires a table with a serialize method"
 
@@ -106,7 +126,8 @@ function Shared.isReading(self: any): boolean
 	return self._kind == "read"
 end
 
--- error returns the first error latched on the stream, or nil.
+-- error returns the first refusal latched on the stream, a Refusal reason
+-- (or, after serializeObject, the object's own error value), or nil.
 function Shared.error(self: any): any
 	return self._error
 end
@@ -216,7 +237,7 @@ local function fixedWidth(s: any, n: number, writeValue: () -> number): (boolean
 		return false, nil
 	end
 	if not s:_room(n) then
-		return s:_fail(OVERFLOW), nil
+		return s:_fail(PAST_END), nil
 	end
 	if s._kind == "read" then
 		return true, s:_get(n)
@@ -249,7 +270,7 @@ function Shared.serializeBits64(self: any, h: any, bits: number): boolean
 		return false
 	end
 	if not self:_room(bits) then
-		return self:_fail(OVERFLOW)
+		return self:_fail(PAST_END)
 	end
 	if self._kind == "read" then
 		h.value = Uint64._wrap(self:_getWide(bits, 2))
@@ -302,7 +323,7 @@ local function wideFixed(C: any, bits: number, name: string)
 			return false
 		end
 		if not self:_room(bits) then
-			return self:_fail(OVERFLOW)
+			return self:_fail(PAST_END)
 		end
 		if self._kind == "read" then
 			h.value = C._wrap(self:_getWide(bits, C.limbs))
@@ -337,7 +358,7 @@ function Shared.serializeInt(self: any, h: any, min: number, max: number): boole
 			return self:_fail(RANGE)
 		end
 		if not self:_room(bits) then
-			return self:_fail(OVERFLOW)
+			return self:_fail(PAST_END)
 		end
 		self:_put(v - min, bits)
 		return true
@@ -346,7 +367,7 @@ function Shared.serializeInt(self: any, h: any, min: number, max: number): boole
 		return false
 	end
 	if not self:_room(bits) then
-		return self:_fail(OVERFLOW)
+		return self:_fail(PAST_END)
 	end
 	local offset = self:_get(bits)
 	if offset > diff then
@@ -376,7 +397,7 @@ local function ranged(C: any, name: string)
 				return self:_fail(RANGE)
 			end
 			if not self:_room(bits) then
-				return self:_fail(OVERFLOW)
+				return self:_fail(PAST_END)
 			end
 			self:_putWide(Wide.sub(v, lo, n), bits)
 			return true
@@ -385,7 +406,7 @@ local function ranged(C: any, name: string)
 			return false
 		end
 		if not self:_room(bits) then
-			return self:_fail(OVERFLOW)
+			return self:_fail(PAST_END)
 		end
 		local offset = self:_getWide(bits, n)
 		if Wide.cmpU(offset, range, n) > 0 then
@@ -467,7 +488,7 @@ local function fixedMethod(C: any, width: number, name: string)
 				return self:_fail(RANGE)
 			end
 			if not self:_room(bits) then
-				return self:_fail(OVERFLOW)
+				return self:_fail(PAST_END)
 			end
 			self:_putWide(offset, bits)
 			return true
@@ -476,7 +497,7 @@ local function fixedMethod(C: any, width: number, name: string)
 			return false
 		end
 		if not self:_room(bits) then
-			return self:_fail(OVERFLOW)
+			return self:_fail(PAST_END)
 		end
 		local offset = self:_getWide(bits, width)
 		if Wide.cmpU(offset, rawRange, width) > 0 then
@@ -527,6 +548,7 @@ end
 
 local BUCKETS = { { 2, 6 }, { 7, 23 }, { 24, 280 }, { 281, 4377 }, { 4378, 69914 } }
 local INT_RELATIVE_MAX = 2147483647
+local INT_RELATIVE_BOUNDED_MAX = 69914 -- the last bounded tier's top difference
 
 function Shared.serializeIntRelative(self: any, previous: number, h: any): boolean
 	int32Arg(previous, "serializeIntRelative", "previous")
@@ -562,9 +584,17 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 	if self._error ~= nil then
 		return false
 	end
-	local function result(reconstructed: number): boolean
+	-- every tier's reconstruction is checked against the domain and previous
+	-- (value_out_of_range); then the absolute tier is canonical too: a current
+	-- no more than 69914 above previous has a bounded encoding, and the
+	-- absolute one is a second encoding of it (non_canonical). Numbers hold
+	-- every value here exactly (all below 2^33), so nothing wraps.
+	local function result(reconstructed: number, absolute: boolean): boolean
 		if reconstructed > INT_RELATIVE_MAX or reconstructed <= previous then
 			return self:_fail(RANGE)
+		end
+		if absolute and reconstructed - previous <= INT_RELATIVE_BOUNDED_MAX then
+			return self:_fail(NON_CANONICAL)
 		end
 		h.value = reconstructed
 		return true
@@ -574,7 +604,7 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 		return false
 	end
 	if flag.value then
-		return result(previous + 1)
+		return result(previous + 1, false)
 	end
 	for _, bucket in BUCKETS do
 		if not self:serializeBool(flag) then
@@ -585,39 +615,104 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 			if not self:serializeInt(difference, bucket[1], bucket[2]) then
 				return false
 			end
-			return result(previous + difference.value)
+			return result(previous + difference.value, false)
 		end
 	end
 	local v = { value = 0 }
 	if not self:serializeBits(v, 32) then
 		return false
 	end
-	return result(v.value)
+	return result(v.value, true)
 end
 
 -- ---------------------------------------------------------------------------
--- float and double (STANDARD.md float, double).
+-- float and double (STANDARD.md float, double; Finite values only, every one
+-- bit exact).
 --
--- serializeFloatBits / serializeDoubleBits carry the IEEE bit pattern itself
--- (a number in [0, 2^32), a Uint64): every pattern, NaN payloads included, byte
--- for byte. serializeFloat / serializeDouble carry a moo number across the
--- float boundary: a write sends the nearest IEEE value, ties to even; a read
--- refuses, with ValueOutOfRange, a NaN, an infinity, or a value outside the
--- number range, and otherwise rounds to the nearest number, ties to even.
+-- The format carries FINITE values only: a pattern whose exponent field is all
+-- ones (NaN with any payload, either infinity) is refused on read as
+-- non_finite_float, tested on the raw bits before the holder is written, and
+-- latched as non_finite_float on write (and measure), as serialize.go's
+-- writer does. Every finite pattern travels bit for bit.
+--
+-- serializeFloatBits / serializeDoubleBits carry the finite IEEE bit pattern
+-- itself (a number in [0, 2^32), a Uint64), -0, the subnormals and values far
+-- past 2^47 included, which no moo number can hold. serializeFloat /
+-- serializeDouble carry a moo number across the float boundary: a write sends
+-- the nearest IEEE value, ties to even (always finite); a read refuses a
+-- non-finite pattern as non_finite_float, a finite value outside the number
+-- range as value_out_of_range, and otherwise rounds to the nearest number,
+-- ties to even.
 
-function Shared.serializeFloatBits(self: any, h: any): boolean
-	return Shared.serializeUint32(self, h)
+local F32_EXPONENT = 0x7F800000
+local F64_EXPONENT_HI = 0x7FF00000 -- the exponent field, in the high limb
+
+local function floatBitsAreFinite(bits: number): boolean
+	return bit32.band(bits, F32_EXPONENT) ~= F32_EXPONENT
 end
 
-Shared.serializeDoubleBits = wideFixed(Uint64, 64, "serializeDoubleBits")
+local function doubleBitsAreFinite(hi: number): boolean
+	return bit32.band(hi, F64_EXPONENT_HI) ~= F64_EXPONENT_HI
+end
+
+function Shared.serializeFloatBits(self: any, h: any): boolean
+	if self._kind ~= "read" then
+		uintArg(h.value, 32, "serializeFloatBits", "value")
+	end
+	if self._error ~= nil then
+		return false
+	end
+	if self._kind ~= "read" and not floatBitsAreFinite(h.value) then
+		return self:_fail(NON_FINITE)
+	end
+	if not self:_room(32) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind ~= "read" then
+		self:_put(h.value, 32)
+		return true
+	end
+	local bits = self:_get(32)
+	if not floatBitsAreFinite(bits) then
+		return self:_fail(NON_FINITE)
+	end
+	h.value = bits
+	return true
+end
+
+function Shared.serializeDoubleBits(self: any, h: any): boolean
+	local limbs: { number }
+	if self._kind ~= "read" then
+		limbs = wideArg(Uint64, h.value, "serializeDoubleBits", "value")
+	end
+	if self._error ~= nil then
+		return false
+	end
+	if self._kind ~= "read" and not doubleBitsAreFinite(limbs[2]) then
+		return self:_fail(NON_FINITE)
+	end
+	if not self:_room(64) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind ~= "read" then
+		self:_putWide(limbs, 64)
+		return true
+	end
+	local got = self:_getWide(64, 2)
+	if not doubleBitsAreFinite(got[2]) then
+		return self:_fail(NON_FINITE)
+	end
+	h.value = Uint64._wrap(got)
+	return true
+end
 
 function Shared.serializeFloat(self: any, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "number", "serializeFloat", "value", "a number")
-		return Shared.serializeUint32(self, { value = Float.toFloatBits(h.value) })
+		return Shared.serializeFloatBits(self, { value = Float.toFloatBits(h.value) })
 	end
 	local bits = { value = 0 }
-	if not Shared.serializeUint32(self, bits) then
+	if not Shared.serializeFloatBits(self, bits) then
 		return false
 	end
 	local n = Float.fromFloatBits(bits.value)
@@ -698,6 +793,13 @@ local function compressed(s: any, valueBits: number?, maxIntegerValue: number, b
 		return true, nil
 	end
 	if s._kind == "write" then
+		-- a declaration whose top integer decodes to a value that is not finite
+		-- (min + delta, rounded once) is non-conforming as a whole (STANDARD.md
+		-- compressed_float, The decode must be finite): misuse, on the write path
+		-- only, as serialize.go; a reader refuses the non-finite decode itself
+		if not Float.isFinite(Float.fadd(min, delta)) then
+			error(RAISE_COMPRESSED_DECODE, 3)
+		end
 		local v = valueBits :: number
 		local normalized = Float.fdiv(Float.fsub(v, min), delta)
 		if not Float.le(0, normalized) then
@@ -714,7 +816,7 @@ local function compressed(s: any, valueBits: number?, maxIntegerValue: number, b
 			return false, nil
 		end
 		if not s:_room(bits) then
-			return s:_fail(OVERFLOW), nil
+			return s:_fail(PAST_END), nil
 		end
 		s:_put(integerValue, bits)
 		return true, nil
@@ -723,19 +825,25 @@ local function compressed(s: any, valueBits: number?, maxIntegerValue: number, b
 		return false, nil
 	end
 	if not s:_room(bits) then
-		return s:_fail(OVERFLOW), nil
+		return s:_fail(PAST_END), nil
 	end
 	local integerValue = s:_get(bits)
 	if integerValue > maxIntegerValue then
 		return s:_fail(RANGE), nil
 	end
 	local normalized = Float.fdiv(Float.fromUint(integerValue), Float.fromUint(maxIntegerValue))
-	return true, Float.fadd(Float.fmul(normalized, delta), min)
+	local decoded = Float.fadd(Float.fmul(normalized, delta), min)
+	-- every operand finite and the integer in range, and still the final add can
+	-- round past FLT_MAX: no declaration hands NaN or an infinity across the wire
+	if not Float.isFinite(decoded) then
+		return s:_fail(NON_FINITE), nil
+	end
+	return true, decoded
 end
 
--- valueArg: the value to write as float32 bits. The Bits form must be finite
--- (STANDARD.md compressed_float: non-finite input is non-conforming, and the
--- script ports raise on it); a number always is.
+-- compressedValue: the value to write as float32 bits. The Bits form must be
+-- finite (IMPLEMENTING.md, The check model: a compressed_float value that is
+-- not finite is misuse); a number always is.
 local function compressedValue(s: any, h: any, asBits: boolean, name: string): number?
 	if s._kind ~= "write" then
 		return nil
@@ -793,7 +901,7 @@ Shared.serializeCompressedFloatPrecomputed = compressedMethod(false, true, "seri
 Shared.serializeCompressedFloatPrecomputedBits = compressedMethod(true, true, "serializeCompressedFloatPrecomputedBits")
 
 -- ---------------------------------------------------------------------------
--- align, bytes, string, wstring (STANDARD.md align, bytes, string, wstring).
+-- align, bytes, string, end (STANDARD.md align, bytes, string, end).
 
 function Shared.serializeAlign(self: any): boolean
 	if self._kind == "measure" then
@@ -811,14 +919,14 @@ function Shared.serializeAlign(self: any): boolean
 		return true
 	end
 	if not self:_room(n) then
-		return self:_fail(OVERFLOW)
+		return self:_fail(PAST_END)
 	end
 	if self._kind == "write" then
 		self:_put(0, n)
 		return true
 	end
 	if self:_get(n) ~= 0 then
-		return self:_fail(SerializeError.Align)
+		return self:_fail(NONZERO_PADDING)
 	end
 	return true
 end
@@ -835,7 +943,7 @@ function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: 
 		return false
 	end
 	if not self:_room(cnt * 8) then
-		return self:_fail(OVERFLOW)
+		return self:_fail(PAST_END)
 	end
 	if self._kind == "write" then
 		self._packer:_copy(data, off, cnt)
@@ -898,49 +1006,19 @@ local function validUtf8(s: string): boolean
 	return true
 end
 
--- decodeRunes walks s as Go's for range does: each well-formed sequence is its
--- code point, and every byte that does not start one is U+FFFD, one byte.
-local function decodeRunes(s: string): { number }
-	local runes = {}
-	local i, n = 1, #s
-	while i <= n do
-		local c = string.byte(s, i) :: number
-		if c < 0x80 then
-			table.insert(runes, c)
-			i += 1
-		else
-			local len = 0
-			if c >= 0xC2 and c <= 0xDF then
-				len = 2
-			elseif c >= 0xE0 and c <= 0xEF then
-				len = 3
-			elseif c >= 0xF0 and c <= 0xF4 then
-				len = 4
-			end
-			if len > 0 and i + len - 1 <= n and validUtf8(string.sub(s, i, i + len - 1)) then
-				table.insert(runes, utf8.codepoint(s, i) :: number)
-				i += len
-			else
-				table.insert(runes, 0xFFFD)
-				i += 1
-			end
-		end
-	end
-	return runes
-end
-
-local function utf16Length(runes: { number }): number
-	local n = 0
-	for _, r in runes do
-		n += if r >= 0x10000 then 2 else 1
-	end
-	return n
-end
-
+-- serializeString(h, bufferSize): the length as serializeInt(length, 0,
+-- bufferSize - 1), then the bytes, aligned. A writer is handed well-formed
+-- UTF-8 with no zero byte (misuse raises otherwise); a reader checks the
+-- claimed length against the bytes that remain before it reads them, then
+-- refuses a zero byte (embedded_nul) BEFORE it checks the encoding
+-- (invalid_utf8), so a payload breaking both is embedded_nul.
 function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 	bufferSizeArg(bufferSize)
 	if self._kind ~= "read" then
 		need(type(h.value) == "string", "serializeString", "value", "a string")
+		if string.find(h.value, "\0", 1, true) ~= nil or not validUtf8(h.value) then
+			error(RAISE_STRING_TEXT, 2)
+		end
 		if self._error ~= nil then
 			return false
 		end
@@ -955,7 +1033,7 @@ function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 			return false
 		end
 		if not self:_room(#s * 8) then
-			return self:_fail(OVERFLOW)
+			return self:_fail(PAST_END)
 		end
 		if self._kind == "write" and #s > 0 then
 			self._packer:_copy(buffer.fromstring(s), 0, #s)
@@ -975,82 +1053,42 @@ function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 	end
 	local n = length.value
 	if not self:_room(n * 8) then
-		return self:_fail(OVERFLOW)
+		return self:_fail(PAST_END)
 	end
 	local s = buffer.readstring(self._reader._data, self._bits // 8, n)
 	self._reader._bitsRead += n * 8
 	self._bits += n * 8
-	if string.find(s, "\0", 1, true) ~= nil or not validUtf8(s) then
-		return self:_fail(RANGE)
+	if string.find(s, "\0", 1, true) ~= nil then
+		return self:_fail(EMBEDDED_NUL)
+	end
+	if not validUtf8(s) then
+		return self:_fail(INVALID_UTF8)
 	end
 	h.value = s
 	return true
 end
 
-function Shared.serializeWideString(self: any, h: any, bufferSize: number): boolean
-	bufferSizeArg(bufferSize)
-	if self._kind ~= "read" then
-		need(type(h.value) == "string", "serializeWideString", "value", "a string")
-		if self._error ~= nil then
-			return false
-		end
-		local runes = decodeRunes(h.value)
-		local units = utf16Length(runes)
-		if units >= bufferSize then
-			return self:_fail(RANGE)
-		end
-		if not self:serializeInt({ value = units }, 0, bufferSize - 1) then
-			return false
-		end
-		for _, r in runes do
-			if r >= 0x10000 then
-				local u = r - 0x10000
-				if not self:serializeBits({ value = 0xD800 + u // 1024 }, 32) then
-					return false
-				end
-				if not self:serializeBits({ value = 0xDC00 + u % 1024 }, 32) then
-					return false
-				end
-			elseif not self:serializeBits({ value = r }, 32) then
-				return false
-			end
-		end
-		return true
-	end
+-- serializeEnd(): the end of the object (STANDARD.md end). A packet reader
+-- calls it after the last field of the top-level object. A read refuses a
+-- whole byte or more left over as trailing_data, checked FIRST, then reads the
+-- final byte's 0 to 7 unused bits and refuses a set one as nonzero_padding; an
+-- accepted end leaves bitsProcessed() at 8 times the byte count. On a failed
+-- stream it is refused with the first refusal's reason. A write or a measure
+-- emits nothing and costs nothing.
+function Shared.serializeEnd(self: any): boolean
 	if self._error ~= nil then
 		return false
 	end
-	local length = { value = 0 }
-	if not self:serializeInt(length, 0, bufferSize - 1) then
-		return false
+	if self._kind ~= "read" then
+		return true
 	end
-	local n = length.value
-	if not self:_room(n * 32) then
-		return self:_fail(OVERFLOW)
+	local remaining = self._numBits - self._bits
+	if remaining >= 8 then
+		return self:_fail(TRAILING_DATA)
 	end
-	local parts = {}
-	local i = 0
-	while i < n do
-		local unit = self:_get(32)
-		if unit == 0 or unit > 0xFFFF or (unit >= 0xDC00 and unit <= 0xDFFF) then
-			return self:_fail(RANGE)
-		end
-		if unit >= 0xD800 and unit <= 0xDBFF then
-			i += 1
-			if i == n then
-				return self:_fail(RANGE)
-			end
-			local low = self:_get(32)
-			if low < 0xDC00 or low > 0xDFFF then
-				return self:_fail(RANGE)
-			end
-			table.insert(parts, utf8.char(0x10000 + (unit - 0xD800) * 1024 + (low - 0xDC00)))
-		else
-			table.insert(parts, utf8.char(unit))
-		end
-		i += 1
+	if remaining > 0 and self:_get(remaining) ~= 0 then
+		return self:_fail(NONZERO_PADDING)
 	end
-	h.value = table.concat(parts)
 	return true
 end
 
@@ -1194,7 +1232,7 @@ local function bitsRequired(min: number, max: number): number
 end
 
 return table.freeze({
-	SerializeError = SerializeError,
+	Refusal = Refusal,
 	WriteStream = table.freeze(WriteStream),
 	ReadStream = table.freeze(ReadStream),
 	MeasureStream = table.freeze(MeasureStream),
@@ -1204,5 +1242,4 @@ return table.freeze({
 	bitsRequired = bitsRequired,
 	_compressedFloatParamsBits = compressedFloatParams,
 	_validUtf8 = validUtf8,
-	_decodeRunes = decodeRunes,
 })

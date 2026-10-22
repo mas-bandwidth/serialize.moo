@@ -10,6 +10,7 @@ function T.TestReadmeExample()
 	w:serializeInt({ value = 42 }, -100, 100)
 	w:serializeFixedNumber({ value = 3.25 }, -1000, 1000)
 	w:serializeCompressedFloat({ value = 2.5 }, 0, 10, serialize.Float32.parse("0.01"))
+	w:serializeEnd()
 	w:flush()
 
 	local r = serialize.ReadStream.new(w:data())
@@ -17,7 +18,11 @@ function T.TestReadmeExample()
 	r:serializeInt(n, -100, 100)
 	r:serializeFixedNumber(x, -1000, 1000)
 	r:serializeCompressedFloat(f, 0, 10, serialize.Float32.parse("0.01"))
+	r:serializeEnd() -- a packet reader ends the object: trailing bytes and set padding are refused
 	assert(r:ok() and n.value == 42 and x.value == 3.25 and f.value == 2.5)
+
+	local bad = serialize.ReadStream.new(buffer.fromstring("\xFF"))
+	assert(not bad:serializeInt(n, 0, 100) and bad:error() == serialize.Refusal.ValueOutOfRange)
 end
 
 return T

@@ -1,0 +1,97 @@
+# test/conformance/controls.txt -- the NEGATIVE CONTROLS (STANDARD.md, The
+# conformance corpus: "for each refusal rule, a reader with that one rule
+# deleted, run against the real corpus, must fail exactly the vectors its
+# conformance-controls/<rule>.expected file names and no others").
+#
+# Each block deletes one rule: tools/moorun copies the unit, replaces the
+# needle (which must occur EXACTLY once in the file, so a needle that stops
+# matching is red, never a silent no-op) with the patch, and runs
+# conformance_test.moo there in control mode. The .expected lists are vendored
+# verbatim from the reference: the oracle, never computed here. Nothing of a
+# control ships. Escapes: \t, \n, \\. These are the reversed witnesses of every
+# 2.0 rule: each is the rule's old behaviour, planted back.
+
+control align-padding
+file serialize_stream.moo
+needle \tif self:_get(n) ~= 0 then
+patch \tif self:_get(n) == -1 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+# serializeInt forms a degenerate range's value on the same line, offset zero
+# plus min; the C++ reader takes it from min on an arm of its own, which its
+# sabotage does not reach. The patch keeps that arm, so the deleted rule is the
+# same rule over the same reads.
+control ranged-reconstruction
+file serialize_stream.moo
+needle \th.value = offset + min
+patch \th.value = if diff == 0 then offset + min else offset -- NEGATIVE CONTROL: min is dropped on purpose
+
+control ranged-range
+file serialize_stream.moo
+needle \tif offset > diff then
+patch \tif offset > diff + 4294967295 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control fixed-degenerate-terminal
+file serialize_stream.moo
+needle \t\tif self._error ~= nil then\n\t\t\treturn false\n\t\tend\n\t\tif not self:_room(bits) then\n\t\t\treturn self:_fail(PAST_END)\n\t\tend\n\t\tlocal offset = self:_getWide(bits, width)
+patch \t\tif self._error ~= nil and bits ~= 0 then -- NEGATIVE CONTROL: a zero-bit read skips the failure state on purpose\n\t\t\treturn false\n\t\tend\n\t\tif not self:_room(bits) then\n\t\t\treturn self:_fail(PAST_END)\n\t\tend\n\t\tlocal offset = self:_getWide(bits, width)
+
+control float-finite
+file serialize_stream.moo
+needle \tlocal bits = self:_get(32)\n\tif not floatBitsAreFinite(bits) then
+patch \tlocal bits = self:_get(32)\n\tif not floatBitsAreFinite(bits) and bits == 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control double-finite
+file serialize_stream.moo
+needle \tif not doubleBitsAreFinite(got[2]) then
+patch \tif not doubleBitsAreFinite(got[2]) and got[2] == 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control compressed-float-finite
+file serialize_stream.moo
+needle \tif not Float.isFinite(decoded) then
+patch \tif not Float.isFinite(decoded) and decoded == 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control end-trailing-data
+file serialize_stream.moo
+needle \tif remaining >= 8 then
+patch \tif remaining >= 8 and remaining < 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control end-padding
+file serialize_stream.moo
+needle \tif remaining > 0 and self:_get(remaining) ~= 0 then
+patch \tif remaining > 0 and self:_get(remaining) == -1 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control int-relative-canonical
+file serialize_stream.moo
+needle \t\tif absolute and reconstructed - previous <= INT_RELATIVE_BOUNDED_MAX then
+patch \t\tif absolute and reconstructed - previous <= INT_RELATIVE_BOUNDED_MAX and reconstructed < 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control string-embedded-nul
+file serialize_stream.moo
+needle \tif string.find(s, "\\0", 1, true) ~= nil then
+patch \tif string.find(s, "\\0", 1, true) ~= nil and #s < 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+control string-utf8
+file serialize_stream.moo
+needle \tif not validUtf8(s) then
+patch \tif not validUtf8(s) and #s < 0 then -- NEGATIVE CONTROL: this rule is deleted on purpose
+
+# validUtf8 is hand-written (no platform decoder), so the surrogate clause is
+# deleted alone: after ED the second byte may run to BF, as it may after E1.
+control string-utf8-surrogate
+file serialize_stream.moo
+needle \t\t\t\tneed2, lo, hi = 2, 0x80, 0x9F
+patch \t\t\t\tneed2, lo, hi = 2, 0x80, 0xBF -- NEGATIVE CONTROL: encoded surrogates accepted on purpose
+
+control wrong-reason
+file serialize_stream.moo
+needle \t\treturn self:_fail(EMBEDDED_NUL)
+patch \t\treturn self:_fail(INVALID_UTF8) -- NEGATIVE CONTROL: the wrong reason on purpose
+
+# The int64 read carries its value through a binary64, as a runtime whose
+# number is a double would: rounded to 53 significant bits, ties to even, and
+# 2^63 saturated to the largest int64 (serialize.go's control). A degenerate
+# range keeps its own arm, as under ranged-reconstruction.
+control int64-through-double
+file serialize_stream.moo
+needle \t\th.value = C._wrap(Wide.add(offset, lo, n))
+patch \t\tlocal v = Wide.add(offset, lo, n) -- NEGATIVE CONTROL: the value goes through a double on purpose\n\t\tif n == 2 and bits ~= 0 then\n\t\t\tlocal negative = Wide.isNegative(v, 2)\n\t\t\tlocal m = if negative then Wide.neg(v, 2) else v\n\t\t\tlocal len = Wide.bitLen(m, 2)\n\t\t\tif len > 53 then\n\t\t\t\tlocal drop = len - 53\n\t\t\t\tlocal q = Wide.shr(m, drop, 2, 0)\n\t\t\t\tlocal rem = Wide.sub(m, Wide.shl(q, drop, 2), 2)\n\t\t\t\tlocal half = Wide.shl({ 1, 0 }, drop - 1, 2)\n\t\t\t\tlocal c = Wide.cmpU(rem, half, 2)\n\t\t\t\tif c > 0 or (c == 0 and q[1] % 2 == 1) then\n\t\t\t\t\tq = Wide.add(q, { 1, 0 }, 2)\n\t\t\t\tend\n\t\t\t\tm = Wide.shl(q, drop, 2)\n\t\t\tend\n\t\t\tif not negative and m[2] >= 2147483648 then\n\t\t\t\tm = { 4294967295, 2147483647 }\n\t\t\tend\n\t\t\tv = if negative then Wide.neg(m, 2) else m\n\t\tend\n\t\th.value = C._wrap(v)
