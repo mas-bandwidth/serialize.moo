@@ -1,0 +1,76 @@
+# serialize.moo CI: the lints, the C oracles, moo-analyze and every test
+# directory on the pinned moo, and the vendored corpus checked against its
+# pin. Every job runs on the fleet's self-hosted runners, never on a
+# GitHub-hosted runner (tools/check-ci.sh refuses one).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test on the pinned moo
+    runs-on: [self-hosted, Linux, X64, fleet]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The pin lives once, in the Makefile; the cache key is derived from it.
+      - name: Read the moo pin from the Makefile
+        id: pin
+        run: |
+          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dist/moo
+        uses: actions/cache@v4
+        with:
+          path: dist/moo
+          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+
+      # dist-moo refuses a checkout that is not the pin; a cached dist/moo
+      # whose PIN file is the pin is used as it is
+      - name: Build the pinned moo
+        run: |
+          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/moorun/go.mod
+          cache: false
+
+      - name: Test
+        run: make test
+
+  corpus:
+    name: STANDARD.md and the corpus match the pin
+    runs-on: [self-hosted, Linux, X64, fleet]
+    timeout-minutes: 5
+    env:
+      SERIALIZE_TAG: v1.17.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # STANDARD.md, conformance/ and conformance-controls/ are VERBATIM copies
+      # of the reference at the corpus pin (DESIGN.md, "The vendored
+      # standard"); a divergence is red, never a skip.
+      - name: Check out the reference at the corpus pin
+        run: git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
+
+      - name: The vendored corpus and standard are the pin's
+        run: |
+          diff -ru "$RUNNER_TEMP/serialize/conformance" conformance
+          diff -ru "$RUNNER_TEMP/serialize/conformance-controls" conformance-controls
+          diff -u "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md
