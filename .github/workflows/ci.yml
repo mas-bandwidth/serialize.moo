@@ -10,6 +10,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -17,6 +20,10 @@ concurrency:
 jobs:
   test:
     name: test on the pinned moo
+    # The repository is public and these are the fleet's self-hosted runners
+    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
+    # request from a fork never runs on them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 20
     steps:
@@ -54,6 +61,10 @@ jobs:
 
   corpus:
     name: STANDARD.md and the corpus match the pin
+    # The repository is public and these are the fleet's self-hosted runners
+    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
+    # request from a fork never runs on them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 5
     env:
@@ -67,7 +78,7 @@ jobs:
       # of the reference at the corpus pin (DESIGN.md, "The vendored
       # standard"); a divergence is red, never a skip.
       - name: Check out the reference at the corpus pin
-        run: git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
+        run: rm -rf "$RUNNER_TEMP/serialize" && git clone --quiet --depth 1 --branch "$SERIALIZE_TAG" https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
 
       - name: The vendored corpus and standard are the pin's
         run: |
