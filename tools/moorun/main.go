@@ -116,19 +116,22 @@ func run(root string, names []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// allDirs reports whether names is every directory under test/.
+// allDirs reports whether names covers every directory under test/.
 func allDirs(root string, names []string) bool {
 	entries, err := os.ReadDir(filepath.Join(root, "test"))
 	if err != nil {
 		return false
 	}
-	n := 0
+	given := map[string]bool{}
+	for _, n := range names {
+		given[n] = true
+	}
 	for _, e := range entries {
-		if e.IsDir() {
-			n++
+		if e.IsDir() && !given[e.Name()] {
+			return false
 		}
 	}
-	return n == len(names)
+	return true
 }
 
 // interpreter resolves $MOO, else the pinned dist/moo/moo.
@@ -370,6 +373,11 @@ func runUnit(root, moo, name string, c *control, stdout, stderr io.Writer) bool 
 		return false
 	case fails != 0 || passes != runs:
 		fmt.Fprintf(stdout, "FAIL %s: %d of %d tests failed\n", label, runs-passes, runs)
+		return false
+	case c != nil && !strings.Contains(out.String(), "  control "+c.rule+": exactly the "):
+		// a control that ran no comparison against its .expected list passed
+		// vacuously: the directory's tests ignored CONTROL
+		fmt.Fprintf(stdout, "FAIL %s: the run never compared its failures with conformance-controls/%s.expected\n", label, c.rule)
 		return false
 	}
 	fmt.Fprintf(stdout, "ok %s %d passed\n", label, passes)

@@ -213,6 +213,13 @@ of its 8-byte word, as the 64-bit store does. A value wider than 32 bits is
 written low 32 bits first; a 128-bit value low half first. The reader reads
 byte by byte and never touches a byte past the data's end.
 
+**The buffer contract** (IMPLEMENTING.md): a ReadStream takes the packet's
+bytes exactly, with no slack, because it reads byte by byte; the conformance
+harness therefore presents each vector's bytes and nothing after them, and
+`serializeEnd` refuses anything past the object. A WriteStream's buffer is a
+multiple of 8 bytes; `data()` returns the `bytesProcessed()` bytes of the
+packet.
+
 ## Writer and reader
 
 **The writer is strict:** serialize.go's bytes for the same values; it latches

@@ -161,6 +161,12 @@ local function parseVectors(text: string): { any }
 			if v ~= nil then
 				cur.measure = tonumber(v)
 			end
+			-- every line is one of the keys (STANDARD.md, The vector format), in
+			-- its exact shape: a misspelled one would silently drop a check
+			local known = string.match(trimmed, "^name .+$") or string.match(trimmed, "^param [%w_]+ = .+$") or trimmed == "bytes" or string.match(trimmed, "^bytes [%x ]+$") or string.match(trimmed, "^expect .+$") or string.match(trimmed, "^consumed %d+$") or trimmed == "writer canonical" or string.match(trimmed, "^writer_input bits = 0x%x+$") or string.match(trimmed, "^measure_at_least %d+$")
+			if not known then
+				fail("malformed vector " .. cur.name .. ": " .. trimmed)
+			end
 		end
 	end
 	flush()
@@ -287,13 +293,17 @@ local stats = { numberForm = 0, numberRefused = 0, fixedNumber = 0 }
 -- record's bytes.
 
 -- scalar runs the shared shape: read, then refused or accepted.
-local function scalar(rec: any, r: any, read: (any, any) -> boolean, initial: () -> any, equal: (any) -> boolean, write: ((any) -> boolean)?)
-	local h = { value = initial() }
+-- UNWRITTEN seeds a read's holder: no reader can produce it, so a refusal
+-- that writes any value at all (min, 0, the decoded value) is seen
+local UNWRITTEN = table.freeze({})
+
+local function scalar(rec: any, r: any, read: (any, any) -> boolean, _initial: () -> any, equal: (any) -> boolean, write: ((any) -> boolean)?)
+	local h = { value = UNWRITTEN }
 	local ok = read(r, h)
 	if rec.expect.refused then
 		check(not ok, rec.name .. ": a refused vector was accepted")
 		refusedFor(r, rec, rec.name)
-		check(rawequal(h.value, initial()) or h.value == initial(), rec.name .. ": the refusal wrote its destination")
+		check(rawequal(h.value, UNWRITTEN), rec.name .. ": the refusal wrote its destination")
 		checkTerminal(r, rec.name)
 		return
 	end
@@ -486,13 +496,15 @@ RUN.compressed_float = function(rec: any, r: any)
 	-- the precomputed entry point decodes the same bits from the same constants
 	local m, b, d = serialize.compressedFloatParams(min, max, res)
 	local r2 = serialize.ReadStream.new(toBuffer(rec.bytes))
-	local h2 = { value = 0 }
+	local h2: any = { value = 0 }
 	local ok2 = r2:serializeCompressedFloatPrecomputedBits(h2, m, b, d, min)
 	check(ok2 == not rec.expect.refused, rec.name .. " (precomputed): accept/refuse differs")
 	if ok2 then
 		check(h2.value == want, rec.name .. " (precomputed): decoded bits differ")
 	else
 		refusedFor(r2, rec, rec.name .. " (precomputed)")
+		check(h2.value == 0, rec.name .. " (precomputed): the refusal wrote its destination")
+		checkTerminal(r2, rec.name .. " (precomputed)")
 	end
 	-- writer_input: the bytes a writer emits for that float32, refused vectors too
 	if rec.writerInput ~= nil then
@@ -599,6 +611,8 @@ RUN.fixed = function(rec: any, r: any)
 		local ok = r2:serializeFixedNumber(h, minN, maxN)
 		if rec.expect.refused then
 			check(not ok and h.value == 777, rec.name .. " (fixed number): a refused vector was accepted or wrote")
+			refusedFor(r2, rec, rec.name .. " (fixed number)")
+			checkTerminal(r2, rec.name .. " (fixed number)")
 			return
 		end
 		local n = Int64.toNumberRaw(want)
@@ -622,6 +636,9 @@ local function step(s: any, st: { string }): (boolean, any)
 	local op = st[1]
 	local dec = (st :: any).decoded
 	local function hold(initial: any): any
+		if dec == nil and s:isReading() then
+			return { value = UNWRITTEN }
+		end
 		return { value = if dec ~= nil then dec else initial }
 	end
 	local ok: boolean, h: any
@@ -691,6 +708,11 @@ local function step(s: any, st: { string }): (boolean, any)
 	end
 	if ok and s:isReading() then
 		(st :: any).decoded = h.value
+	end
+	-- a refused step leaves its destination unwritten (bytes fills the
+	-- caller's buffer, whose contents STANDARD.md leaves unspecified)
+	if not ok and s:isReading() and op ~= "bytes" then
+		check(rawequal(h.value, UNWRITTEN), "a refused " .. op .. " step wrote its destination")
 	end
 	return ok, h.value
 end
@@ -965,6 +987,9 @@ function T.TestMalformedReasonGoesRed()
 	check(not ok and string.find(tostring(err), "names no reason", 1, true) ~= nil, "a refusal with no reason ran: " .. tostring(err))
 	ok, err = pcall(runText, "bool.txt", "operation bool\nname unknown-reason\nbytes\nexpect refused overflow\n")
 	check(not ok and string.find(tostring(err), "overflow is not a refusal reason", 1, true) ~= nil, "a refusal with an unknown reason ran: " .. tostring(err))
+	-- a line that is no key, or a key misspelled, is malformed
+	ok, err = pcall(runText, "bool.txt", "operation bool\nname misspelled\nbytes 01\nexpect value = true\nconsumed 1\nwriter canonicl\n")
+	check(not ok and string.find(tostring(err), "malformed vector misspelled", 1, true) ~= nil, "a misspelled key ran: " .. tostring(err))
 	-- and a stated reason the stream does not give fails the vector
 	ok, err = pcall(runText, "bool.txt", "operation bool\nname wrong-reason\nbytes\nexpect refused value_out_of_range\n")
 	check(not ok and string.find(tostring(err), "refused as past_end, the vector states value_out_of_range", 1, true) ~= nil, "a wrong reason passed: " .. tostring(err))
