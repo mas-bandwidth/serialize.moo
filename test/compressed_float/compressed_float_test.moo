@@ -96,6 +96,41 @@ function T.TestCompressedFloatWitnesses()
 	check(h.value == 5, "code 500 reads back as 5")
 end
 
+-- The decode must be finite (STANDARD.md compressed_float): over
+-- [3 * 2^103, FLT_MAX] at resolution 2^104 every operand is finite and the
+-- top integer (2^24 - 2) is in range, and still the final add rounds to +inf.
+-- A reader refuses that decode as non_finite_float, the holder untouched, and
+-- accepts the integers below it; a writer raises on the declaration itself,
+-- even for a value that would decode finite. The reversed witness: under
+-- format 1.1 the read handed +inf to the caller.
+function T.TestCompressedFloatFiniteDecode()
+	local min, max, res = Float32.fromBits(0x73C00000), Float32.fromBits(0x7F7FFFFF), Float32.fromBits(0x73800000)
+	local m, b = serialize.compressedFloatParams(min, max, res)
+	check(m == 16777214 and b == 24, "the declaration is 16777214 steps in 24 bits, got " .. m .. " in " .. b)
+	local function read(code: number): (boolean, any, any)
+		local w = serialize.WriteStream.new(buffer.create(8))
+		w:serializeBits({ value = code }, 24)
+		w:flush()
+		local r = serialize.ReadStream.new(w:data())
+		local h = { value = 777 }
+		local ok = r:serializeCompressedFloatBits(h, min, max, res)
+		return ok, h.value, r:error()
+	end
+	local ok, v, err = read(16777214)
+	check(not ok and v == 777 and err == serialize.Refusal.NonFiniteFloat, "the top integer decodes to +inf: non_finite_float, got " .. tostring(err))
+	ok, v = read(0)
+	check(ok and v == 0x73C00000, "integer 0 decodes to min")
+	ok, v = read(16777213)
+	check(ok and v ~= 0x7F800000 and v < 0x7F800000, "the integer below the top decodes finite")
+	local r = serialize.ReadStream.new(buffer.fromstring("\xFE\xFF\xFF"))
+	local h = { value = 777 }
+	check(not r:serializeCompressedFloat(h, min, max, res) and h.value == 777 and r:error() == serialize.Refusal.NonFiniteFloat, "the number form refuses it the same way")
+	local ok2, err2 = pcall(function()
+		serialize.WriteStream.new(buffer.create(8)):serializeCompressedFloatBits({ value = 0x73C00000 }, min, max, res)
+	end)
+	check(not ok2 and string.find(tostring(err2), "compressed float declaration decodes its top integer to a value that is not finite", 1, true) ~= nil, "the writer raises on the declaration: " .. tostring(err2))
+end
+
 function T.TestCompressedFloatMisuseRaises()
 	local w = serialize.WriteStream.new(buffer.create(8))
 	local function raises(fn: () -> (), text: string)

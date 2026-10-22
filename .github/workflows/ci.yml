@@ -68,13 +68,13 @@ jobs:
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 5
     env:
-      SERIALIZE_TAG: v1.17.0
+      SERIALIZE_TAG: v2.0.0
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      # STANDARD.md, conformance/ and conformance-controls/ are VERBATIM copies
+      # STANDARD.md, IMPLEMENTING.md, conformance/ and conformance-controls/ are VERBATIM copies
       # of the reference at the corpus pin (DESIGN.md, "The vendored
       # standard"); a divergence is red, never a skip.
       - name: Check out the reference at the corpus pin
@@ -85,3 +85,4 @@ jobs:
           diff -ru "$RUNNER_TEMP/serialize/conformance" conformance
           diff -ru "$RUNNER_TEMP/serialize/conformance-controls" conformance-controls
           diff -u "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md
+          diff -u "$RUNNER_TEMP/serialize/IMPLEMENTING.md" IMPLEMENTING.md

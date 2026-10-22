@@ -2,7 +2,7 @@
 -- serialize.moo -- the entry: returns the API table (DESIGN.md, "The API").
 --
 -- serialize.moo is a bitpacking serializer for moo, wire compatible with
--- serialize (C++, STANDARD.md, format version 1.1), serialize.go and every
+-- serialize (C++, STANDARD.md, format version 2.0), serialize.go and every
 -- other port: the same values produce the same bytes. Load it as
 -- require("./serialize") from a file in the same directory; every module it
 -- loads is required as "./serialize_<name>" from this directory alone
@@ -20,9 +20,10 @@ export type Holder<T> = Stream.Holder<T>
 local S = {}
 
 -- The wire format version this library implements (STANDARD.md, Format version).
-S.FORMAT_VERSION = "1.1"
+S.FORMAT_VERSION = "2.0"
 
-S.SerializeError = Stream.SerializeError
+-- the refusal reasons, STANDARD.md's closed list: stream:error() returns one
+S.Refusal = Stream.Refusal
 S.WriteStream = Stream.WriteStream
 S.ReadStream = Stream.ReadStream
 S.MeasureStream = Stream.MeasureStream

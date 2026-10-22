@@ -15,7 +15,7 @@ end
 
 function T.TestEntryLoadsItsOwnModules()
 	local serialize = require("./serialize")
-	check(serialize.FORMAT_VERSION == "1.1", "format version 1.1")
+	check(serialize.FORMAT_VERSION == "2.0", "format version 2.0")
 	check(table.isfrozen(serialize), "the API table is frozen")
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 5 }, 3), "the entry works")

@@ -4,7 +4,7 @@
 
 ## Every field kind of the C++ reference
 
-The operations of STANDARD.md format 1.1 as serialize.h and serialize.go carry them, on all three streams (write, read, measure), byte for byte and refusal for refusal.
+The operations of STANDARD.md format 2.0 as serialize.h and serialize.go carry them, on all three streams (write, read, measure), byte for byte and refusal for refusal.
 
 <!-- nova-work:fields:start -->
 
@@ -18,14 +18,15 @@ The operations of STANDARD.md format 1.1 as serialize.h and serialize.go carry t
 | int64, ranged | ✅ |
 | int128, ranged | ✅ |
 | fixed point, 64-bit and 128-bit storage (Q112.16, Q64.64) | ✅ |
-| int_relative | ✅ |
-| float, every binary32 pattern | ✅ |
-| double, every binary64 pattern | ✅ |
-| compressed_float in float32 arithmetic | ✅ |
+| int_relative, the absolute tier canonical | ✅ |
+| float, every finite binary32 pattern bit exact, NaN and the infinities refused | ✅ |
+| double, every finite binary64 pattern bit exact, NaN and the infinities refused | ✅ |
+| compressed_float in float32 arithmetic, a non-finite decode refused | ✅ |
 | compressed_float precomputed, and compressedFloatParams | ✅ |
 | bytes | ✅ |
-| string, UTF-8 checked on read | ✅ |
-| wstring, UTF-16 code units | ✅ |
+| string, embedded NUL then UTF-8 checked on read | ✅ |
+| end: trailing data and set padding refused | ✅ |
+| Every refusal names its reason, from STANDARD.md's closed list | ✅ |
 | align | ✅ |
 | object, and sequences of every operation | ✅ |
 | The measure stream, a bound at every start position | ✅ |
@@ -48,8 +49,8 @@ moo has no float, double or 64-bit integer: a number is Q48.16 fixed point. Thes
 | feature | serialize.moo |
 |---|:---:|
 | Uint64, Int64, Uint128 and Int128 with serialize.go's arithmetic | ✅ |
-| The float boundary: one exact rule, ties to even, NaN, infinity and out of range refused on read | ✅ |
-| Bits forms carry any IEEE pattern byte for byte | ✅ |
+| The float boundary: one exact rule, ties to even, a finite value past every moo number refused on read | ✅ |
+| Bits forms carry every finite IEEE pattern byte for byte (-0, subnormals, past 2^47) | ✅ |
 | Float32 arithmetic emulated bit for bit | ✅ |
 | Float32.parse rounds a decimal once, as strtof | ✅ |
 | serializeFixedNumber: a moo number as Q48.16 on the wire, exact | ✅ |
@@ -67,15 +68,15 @@ What holds the port to the reference.
 
 | feature | serialize.moo |
 |---|:---:|
-| All 351 conformance vectors of serialize v1.17.0, discovered, never listed | ✅ |
-| Both negative controls go red: an unknown operation and a sabotaged reader | ✅ |
+| All 397 conformance vectors of serialize v2.0.0, discovered, never listed, every refusal for its stated reason | ✅ |
+| Every negative control: an unknown operation, and 15 sabotaged readers each failing exactly its .expected list | ✅ |
 | C oracles for the boundary and the float32 arithmetic | ✅ |
 | Loading is closed: literal ./ requires, planted shadow never loaded | ✅ |
 | moo-analyze --!strict over every source file | ✅ |
-| CI on the fleet runners | ❌ |
+| CI on the fleet runners | ✅ |
 | Differential fuzzing against serialize.go | ❌ |
 | Nightly run against moo main's head | ❌ |
-| complete | 62% |
+| complete | 75% |
 
 [Source data](docs/roadmap.sexp)
 

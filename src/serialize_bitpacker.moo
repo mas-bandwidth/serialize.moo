@@ -1,7 +1,7 @@
 --!strict
 -- serialize_bitpacker.moo -- BitWriter and BitReader (DESIGN.md, "Bit order"),
 -- the bottom layer of serialize.moo, wire compatible with serialize
--- (STANDARD.md, format version 1.1) and serialize.go bitpacker.go.
+-- (STANDARD.md, format version 2.0) and serialize.go bitpacker.go.
 --
 -- STANDARD.md packs bits least-significant-bit first into a 64-bit scratch
 -- word and stores each full word as 8 little-endian bytes. moo has no 64-bit
