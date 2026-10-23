@@ -7,6 +7,7 @@
 #
 # make test           the lints, the oracles, moo-analyze over src/, then every test/*/
 # make test T=<name>  the same, then test/<name>/ only
+#                     (both run moorun-unit, the runner's own unit tests, first)
 # make oracles        build/oracle/*.txt from oracle/*.c (the C compiler's IEEE arithmetic)
 # make roadmap        ROADMAP.md from docs/roadmap.sexp (make roadmap-check: the drift gate)
 
@@ -20,10 +21,13 @@ export MOO
 CC  ?= cc
 GO  ?= go
 JOBS ?= 4
+# MOORUN_FLAGS: -corpus <dir> -controls <dir> run the suite over another corpus
+# (the nightly functional test: mas-bandwidth/serialize main). Empty: the vendored one.
+MOORUN_FLAGS ?=
 MOORUN := build/moorun
 ORACLE_CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -Werror -ffp-contract=off
 
-.PHONY: all dist-moo toolchain lint analyze oracles test clean
+.PHONY: all dist-moo toolchain lint analyze oracles moorun-unit test clean
 all: test
 
 # dist-moo clones the pinned commit and builds the CLI and the analyzer. It
@@ -72,8 +76,12 @@ $(MOORUN): tools/moorun/main.go tools/moorun/go.mod
 	@mkdir -p build
 	@cd tools/moorun && $(GO) build -o ../../$(MOORUN) .
 
-test: lint analyze oracles $(MOORUN)
-	@./$(MOORUN) -root $(CURDIR) $(T)
+# moorun-unit: the runner's own unit tests (-corpus and -controls); no moo.
+moorun-unit:
+	@cd tools/moorun && $(GO) vet . && $(GO) test -count=1 .
+
+test: lint analyze oracles moorun-unit $(MOORUN)
+	@./$(MOORUN) -root $(CURDIR) $(MOORUN_FLAGS) $(T)
 
 clean:
 	rm -rf build
