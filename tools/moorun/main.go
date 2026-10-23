@@ -38,8 +38,15 @@
 // on an interpreter that exits nonzero, on a directory that runs no test, and
 // on a missing or empty test/<name>/, naming it.
 //
-// Usage: moorun -root <repo> [name...]; no names runs every test/*/.
-// The interpreter is $MOO, else <repo>/dist/moo/moo (make dist-moo).
+// Usage: moorun -root <repo> [-corpus <dir>] [-controls <dir>] [name...]; no
+// names runs every test/*/. The interpreter is $MOO, else <repo>/dist/moo/moo
+// (make dist-moo).
+//
+// The corpus is the vendored <repo>/conformance/ and <repo>/conformance-controls/
+// unless -corpus and -controls name other directories (the nightly functional
+// test points them at mas-bandwidth/serialize main). One that is not a
+// directory fails the run, naming it: never a silent fall back to the vendored
+// copy.
 //
 // Standard library only; no time, no sockets, no network.
 package main
@@ -57,13 +64,50 @@ import (
 	"strings"
 )
 
+// corpusDir and controlsDir override <root>/conformance and
+// <root>/conformance-controls when set (-corpus, -controls).
+var corpusDir, controlsDir string
+
 func main() {
 	root := flag.String("root", ".", "the repository root")
+	flag.StringVar(&corpusDir, "corpus", "", "the conformance/ directory (default <root>/conformance)")
+	flag.StringVar(&controlsDir, "controls", "", "the conformance-controls/ directory (default <root>/conformance-controls)")
 	flag.Parse()
 	os.Exit(run(*root, flag.Args(), os.Stdout, os.Stderr))
 }
 
+// corpusPath is the conformance/ directory the run reads.
+func corpusPath(root string) string {
+	if corpusDir != "" {
+		return corpusDir
+	}
+	return filepath.Join(root, "conformance")
+}
+
+// controlsPath is the conformance-controls/ directory the run reads.
+func controlsPath(root string) string {
+	if controlsDir != "" {
+		return controlsDir
+	}
+	return filepath.Join(root, "conformance-controls")
+}
+
+// checkCorpusDirs refuses, by name, a corpus or controls directory that is
+// not a directory.
+func checkCorpusDirs(root string) error {
+	for _, d := range []struct{ flag, path string }{{"-corpus", corpusPath(root)}, {"-controls", controlsPath(root)}} {
+		if fi, err := os.Stat(d.path); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%s %s is not a directory", d.flag, d.path)
+		}
+	}
+	return nil
+}
+
 func run(root string, names []string, stdout, stderr io.Writer) int {
+	if err := checkCorpusDirs(root); err != nil {
+		fmt.Fprintf(stdout, "FAIL %v\n", err)
+		return 1
+	}
 	moo, why := interpreter(root)
 	if moo == "" {
 		fmt.Fprintf(stderr, "moorun: the moo interpreter does not resolve: %s\n", why)
@@ -98,7 +142,7 @@ func run(root string, names []string, stdout, stderr io.Writer) int {
 	}
 	// a full run must run a control for every vendored .expected list
 	if allDirs(root, names) {
-		expected, _ := filepath.Glob(filepath.Join(root, "conformance-controls", "*.expected"))
+		expected, _ := filepath.Glob(filepath.Join(controlsPath(root), "*.expected"))
 		missing := 0
 		for _, f := range expected {
 			rule := strings.TrimSuffix(filepath.Base(f), ".expected")
@@ -168,7 +212,7 @@ func runDir(root, moo, name string, controlsRun map[string]bool, stdout, stderr 
 	ok := true
 	for i := range controls {
 		c := &controls[i]
-		if _, err := os.Stat(filepath.Join(root, "conformance-controls", c.rule+".expected")); err != nil {
+		if _, err := os.Stat(filepath.Join(controlsPath(root), c.rule+".expected")); err != nil {
 			fmt.Fprintf(stdout, "FAIL test/%s/controls.txt: control %s has no conformance-controls/%s.expected\n", name, c.rule, c.rule)
 			ok = false
 			continue
@@ -400,7 +444,7 @@ type input struct {
 // inputsModule is the moo source of inputs.moo (see the package comment).
 func inputsModule(root, testDir, rule string) ([]byte, error) {
 	var files []input
-	corpus, err := filepath.Glob(filepath.Join(root, "conformance", "*.txt"))
+	corpus, err := filepath.Glob(filepath.Join(corpusPath(root), "*.txt"))
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +452,7 @@ func inputsModule(root, testDir, rule string) ([]byte, error) {
 	for _, f := range corpus {
 		files = append(files, input{strings.TrimSuffix(filepath.Base(f), ".txt"), f})
 	}
-	controls, err := filepath.Glob(filepath.Join(root, "conformance-controls", "*.txt"))
+	controls, err := filepath.Glob(filepath.Join(controlsPath(root), "*.txt"))
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +460,7 @@ func inputsModule(root, testDir, rule string) ([]byte, error) {
 	for _, f := range controls {
 		files = append(files, input{"control_" + strings.TrimSuffix(filepath.Base(f), ".txt"), f})
 	}
-	expected, err := filepath.Glob(filepath.Join(root, "conformance-controls", "*.expected"))
+	expected, err := filepath.Glob(filepath.Join(controlsPath(root), "*.expected"))
 	if err != nil {
 		return nil, err
 	}

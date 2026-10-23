@@ -1,0 +1,127 @@
+# serialize.moo nightly conformance: a functional test, nightly, on the
+# fleet's self-hosted runners, holding this port to the CURRENT C/C++ data in
+# mas-bandwidth/serialize, not only to the copy vendored here.
+#
+# ci.yml proves the port against its vendored conformance/ and
+# conformance-controls/, and its corpus job holds those to the pinned release
+# (SERIALIZE_TAG). Nothing there notices when upstream main moves on: a vector
+# added, a control's .expected changed, the standard revised. This job does.
+# It clones mas-bandwidth/serialize at main HEAD, builds the C++ reference and
+# runs its conformance ctest (its runner over the corpus and its negative
+# controls, so the data at HEAD is data C/C++ accepts today), then runs this
+# port's suite and negative controls over THAT corpus (moorun -corpus and
+# -controls; make moorun-unit is their unit test), and finally diffs the
+# vendored copies against upstream. Drift fails: a port behind the standard is
+# what this job exists to catch.
+#
+# Upstream has no corpus generator (conformance.cpp: the corpus is
+# deliberately not generated from code), so the committed corpus at main HEAD,
+# checked by the C++ reference, is the C/C++ data.
+#
+# No push or pull_request trigger: this never runs in the one-minute CI path.
+name: nightly conformance
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # every day at 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      flip_byte:
+        description: 'Negative control: flip one byte of one vector in the copied upstream corpus, so the port must go red'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  conformance:
+    name: the port against mas-bandwidth/serialize main, on the fleet
+    # The fleet's self-hosted runners (serialize.moo's own set, fleet/runners.tsv
+    # in rowan-tools) serve this repository only: a fork's copy of this
+    # workflow never runs on them.
+    if: github.repository == 'mas-bandwidth/serialize.moo'
+    runs-on: [self-hosted, Linux, X64, fleet]
+    timeout-minutes: 45
+    steps:
+      - name: Runner
+        run: echo "runner $RUNNER_NAME"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Clone mas-bandwidth/serialize at main HEAD
+        run: |
+          rm -rf "$RUNNER_TEMP/serialize"
+          git clone --quiet --depth 1 --branch main https://github.com/mas-bandwidth/serialize.git "$RUNNER_TEMP/serialize"
+          echo "upstream: mas-bandwidth/serialize@$(git -C "$RUNNER_TEMP/serialize" rev-parse HEAD) (committed corpus, checked by the C++ reference; upstream has no generator)"
+
+      # The reference's own build and conformance ctest: its runner over the
+      # corpus and every negative control, at the commit this port is held to.
+      # cmake and the C++ compiler are the ones make dist-moo already uses here.
+      - name: Build the C++ reference and run its conformance ctest
+        working-directory: ${{ runner.temp }}/serialize
+        run: |
+          cmake --version | head -n 1
+          c++ --version | head -n 1
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure -R conformance
+
+      # The pin lives once, in the Makefile; the cache key is derived from it.
+      - name: Read the moo pin from the Makefile
+        id: pin
+        run: |
+          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dist/moo
+        uses: actions/cache@v4
+        with:
+          path: dist/moo
+          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+
+      # dist-moo refuses a checkout that is not the pin; a cached dist/moo
+      # whose PIN file is the pin is used as it is
+      - name: Build the pinned moo
+        run: |
+          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/moorun/go.mod
+          cache: false
+
+      # The negative control for this job: a dispatch with flip_byte set turns
+      # bits-1-one's stream byte 01 into 00 in the RUNNER_TEMP copy of upstream
+      # (after the C++ reference has checked it, never committed anywhere), so
+      # the port decodes 0 where the corpus states 1 and the suite must go red.
+      - name: Flip one byte of one copied upstream vector (negative control only)
+        if: ${{ inputs.flip_byte }}
+        run: |
+          sed -i '/^name bits-1-one$/,/^bytes/ s/^bytes 01$/bytes 00/' "$RUNNER_TEMP/serialize/conformance/bits.txt"
+          grep -A 2 '^name bits-1-one$' "$RUNNER_TEMP/serialize/conformance/bits.txt" | grep -qx 'bytes 00'
+          echo "flipped: conformance/bits.txt bits-1-one bytes 01 -> 00 (the copy in RUNNER_TEMP only)"
+
+      # make test runs every test/*/ and every negative control in
+      # test/*/controls.txt, and fails unless each upstream
+      # conformance-controls/*.expected has a control.
+      - name: The port's suite and negative controls over upstream's conformance/ and conformance-controls/
+        run: make test MOORUN_FLAGS="-corpus $RUNNER_TEMP/serialize/conformance -controls $RUNNER_TEMP/serialize/conformance-controls"
+
+      # Drift is red, never a warning: the vendored copies are VERBATIM
+      # (DESIGN.md, "The vendored standard"), and a vendored copy behind main
+      # is a port behind the standard.
+      - name: Vendored STANDARD.md, IMPLEMENTING.md, conformance/ and conformance-controls/ match upstream main
+        if: ${{ !cancelled() }}
+        run: |
+          diff -ru "$RUNNER_TEMP/serialize/conformance" conformance
+          diff -ru "$RUNNER_TEMP/serialize/conformance-controls" conformance-controls
+          diff -u "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md
+          diff -u "$RUNNER_TEMP/serialize/IMPLEMENTING.md" IMPLEMENTING.md
