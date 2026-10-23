@@ -45,7 +45,7 @@ jobs:
     # in rowan-tools) serve this repository only: a fork's copy of this
     # workflow never runs on them.
     if: github.repository == 'mas-bandwidth/serialize.moo'
-    runs-on: [self-hosted, Linux, X64, fleet]
+    runs-on: [self-hosted, Linux, X64, nightly]
     timeout-minutes: 45
     steps:
       - name: Runner
