@@ -1,0 +1,100 @@
+# serialize.moo nightly fuzz: the differential fuzz of ci.yml's fuzz job
+# (fuzz/differential_test.go against serialize.go v2, fuzz/driver.moo on the
+# pinned moo), run for `duration` seconds on a seed that changes every run,
+# so each night covers programs no earlier run generated. The seed is logged
+# and a failing program names its seed: `make fuzz FUZZ_FLAGS="-seed <seed>"`
+# reproduces it. Each failing program is uploaded as an artifact.
+#
+# moo has no coverage-guided fuzzer, so there is no corpus to carry between
+# runs (the reference's nightly caches its libFuzzer corpus; this one carries
+# nothing): the coverage comes from the seed moving.
+#
+# It runs on the fleet's self-hosted nightly runners, as nightly-conformance.yml
+# does: tools/check-ci.sh refuses a GitHub-hosted runs-on (DESIGN.md, "The
+# runner"). No push or pull_request trigger: this never runs in the one-minute
+# CI path.
+name: nightly fuzz
+
+on:
+  schedule:
+    - cron: '47 6 * * *'   # every day at 06:47 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Seconds of fuzzing (at most 9000: the job times out at 180 minutes)'
+        type: string
+        default: '3600'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: differential fuzz against serialize.go, long, on a varying seed
+    # The fleet's self-hosted runners (serialize.moo's own set, fleet/runners.tsv
+    # in rowan-tools) serve this repository only: a fork's copy of this
+    # workflow never runs on them.
+    if: github.repository == 'mas-bandwidth/serialize.moo'
+    runs-on: [self-hosted, Linux, X64, nightly]
+    timeout-minutes: 180
+    env:
+      DURATION: ${{ inputs.duration || '3600' }}
+    steps:
+      - name: Runner
+        run: echo "runner $RUNNER_NAME"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The pin lives once, in the Makefile; the cache key is derived from it.
+      - name: Read the moo pin from the Makefile
+        id: pin
+        run: |
+          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dist/moo
+        uses: actions/cache@v4
+        with:
+          path: dist/moo
+          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+
+      - name: Build the pinned moo
+        run: |
+          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fuzz/go.mod
+          cache: false
+
+      # a blind harness passes everything: the negative control goes first
+      - name: Negative control (-widen-int must go red)
+        run: make fuzz-control
+
+      - name: Pick and log the seed
+        id: seed
+        run: |
+          case "$DURATION" in ''|*[!0-9]*) echo "duration must be a whole number of seconds, not '$DURATION'"; exit 1 ;; esac
+          if [ "$DURATION" -gt 9000 ]; then echo "duration $DURATION is past 9000 s, the job's 180 minutes"; exit 1; fi
+          seed=$(( $(date +%s) * 1000 + GITHUB_RUN_ATTEMPT ))
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "seed $seed, duration ${DURATION}s; reproduce a failure with: make fuzz FUZZ_FLAGS=\"-seed <its seed>\""
+
+      - name: Differential fuzz for the duration
+        run: make fuzz FUZZ_TIMEOUT=$(( DURATION + 1200 ))s FUZZ_FLAGS="-seed ${{ steps.seed.outputs.seed }} -duration ${DURATION}s"
+
+      - name: Upload the failing programs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/fuzz-failures/
+          if-no-files-found: ignore
+          retention-days: 30

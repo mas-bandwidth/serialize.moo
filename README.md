@@ -32,8 +32,9 @@ assert(not bad:serializeInt(n, 0, 100) and bad:error() == serialize.Refusal.Valu
 make dist-moo       # build the pinned moo (moo, moo-analyze) into dist/moo/
 make test           # lints, C oracles, moo-analyze, then every test/*/
 make test T=boundary
+make fuzz           # differential fuzz against serialize.go (make fuzz-control: its negative control)
 ```
 
-`make test` needs a C compiler and Go for the oracles and the runner; `make dist-moo` needs git and CMake.
+`make test` needs a C compiler and Go for the oracles and the runner; `make fuzz` needs Go; `make dist-moo` needs git and CMake.
 
 BSD 3-Clause license.

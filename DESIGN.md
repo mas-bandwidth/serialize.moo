@@ -286,6 +286,26 @@ control loads it through `../` and sees it raise).
   A full run also fails when a vendored `.expected` list has no control. These
   are the reversed witnesses of every 2.0 rule: each is the rule's old
   behaviour planted back. Nothing of a control ships.
+- **The differential fuzz** (`make fuzz`, `fuzz/`): moo has no
+  coverage-guided fuzzer, so, as serialize.lua and serialize.luau do, a Go
+  test (`fuzz/differential_test.go`, serialize.go v2.0.0 pinned in
+  `fuzz/go.mod`) generates random programs over every operation (bits,
+  bits64, bool, uint8 to uint128, int, int64, int128, fixed on both storage
+  widths, `serializeFixedNumber`, int_relative, float, double,
+  compressed_float plain and precomputed, bytes, string, align, object), each
+  ending with `serializeEnd`, and `fuzz/driver.moo` runs them on the pinned
+  moo. The writers must emit identical bytes and the measures the same bits;
+  moo reads serialize.go's bytes and serialize.go reads moo's, both back to
+  the program's values; and on a mutated copy (bits flipped, bytes
+  overwritten, truncated, extended) the readers must agree on the step they
+  stop at, `bitsProcessed()` there, the refusal reason and every value before
+  it. Floats travel as their bit patterns (the Bits forms): the number forms
+  refuse values past 2^47 that serialize.go accepts, by design. It is a
+  functional test (it spawns moo), never part of `make test`. Its reversed
+  witness is `make fuzz-control`: `-widen-int` makes the Go writer use int
+  ranges one bit wider, and the run must fail on the writers' bytes. CI runs
+  both on every push; `nightly-fuzz.yml` runs it for an hour on a seed that
+  changes every night, logged, and uploads each failing program.
 - CI runs on the fleet's self-hosted runners only; `tools/check-ci.sh` refuses
   a GitHub-hosted `runs-on`.
 
