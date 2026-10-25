@@ -74,9 +74,9 @@ What holds the port to the reference.
 | Loading is closed: literal ./ requires, planted shadow never loaded | ✅ |
 | moo-analyze --!strict over every source file | ✅ |
 | CI on the fleet runners | ✅ |
-| Differential fuzzing against serialize.go | ❌ |
+| Differential fuzzing against serialize.go | ✅ |
 | Nightly run against moo main's head | ❌ |
-| complete | 75% |
+| complete | 87% |
 
 [Source data](docs/roadmap.sexp)
 
