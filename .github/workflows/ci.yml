@@ -59,6 +59,51 @@ jobs:
       - name: Test
         run: make test
 
+  fuzz:
+    name: differential fuzz against serialize.go, and its negative control
+    # The repository is public and these are the fleet's self-hosted runners
+    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
+    # request from a fork never runs on them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, fleet]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The pin lives once, in the Makefile; the cache key is derived from it.
+      - name: Read the moo pin from the Makefile
+        id: pin
+        run: |
+          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dist/moo
+        uses: actions/cache@v4
+        with:
+          path: dist/moo
+          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+
+      - name: Build the pinned moo
+        run: |
+          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fuzz/go.mod
+          cache: false
+
+      # the smoke: 2000 programs on the fixed seed (the nightly runs an hour on a
+      # varying one, nightly-fuzz.yml)
+      - name: Differential fuzz (fixed seed)
+        run: make fuzz
+
+      # the reversed witness: -widen-int must go red on the writers' bytes
+      - name: Negative control (-widen-int must go red)
+        run: make fuzz-control
+
   corpus:
     name: STANDARD.md and the corpus match the pin
     # The repository is public and these are the fleet's self-hosted runners
