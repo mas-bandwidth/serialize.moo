@@ -95,3 +95,12 @@ control int64-through-double
 file serialize_stream.moo
 needle \t\th.value = C._wrap(Wide.add(offset, lo, n))
 patch \t\tlocal v = Wide.add(offset, lo, n) -- NEGATIVE CONTROL: the value goes through a double on purpose\n\t\tif n == 2 and bits ~= 0 then\n\t\t\tlocal negative = Wide.isNegative(v, 2)\n\t\t\tlocal m = if negative then Wide.neg(v, 2) else v\n\t\t\tlocal len = Wide.bitLen(m, 2)\n\t\t\tif len > 53 then\n\t\t\t\tlocal drop = len - 53\n\t\t\t\tlocal q = Wide.shr(m, drop, 2, 0)\n\t\t\t\tlocal rem = Wide.sub(m, Wide.shl(q, drop, 2), 2)\n\t\t\t\tlocal half = Wide.shl({ 1, 0 }, drop - 1, 2)\n\t\t\t\tlocal c = Wide.cmpU(rem, half, 2)\n\t\t\t\tif c > 0 or (c == 0 and q[1] % 2 == 1) then\n\t\t\t\t\tq = Wide.add(q, { 1, 0 }, 2)\n\t\t\t\tend\n\t\t\t\tm = Wide.shl(q, drop, 2)\n\t\t\tend\n\t\t\tif not negative and m[2] >= 2147483648 then\n\t\t\t\tm = { 4294967295, 2147483647 }\n\t\t\tend\n\t\t\tv = if negative then Wide.neg(m, 2) else m\n\t\tend\n\t\th.value = C._wrap(v)
+
+# serializeObject on a failed stream: the entry refusal and the exit refusal
+# (the stream's latch read after the callback) are deleted together, so the
+# object answers for its callback only, as the C++ reader did before 3f40cb5f.
+# Deleting the entry alone is not the rule: the exit would still refuse.
+control object-terminal
+file serialize_stream.moo
+needle \tif self._error ~= nil then\n\t\treturn false\n\tend\n\tlocal ok, err = (method :: any)(object, self)\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else "object")\n\tend\n\treturn self._error == nil
+patch \tlocal ok, err = (method :: any)(object, self) -- NEGATIVE CONTROL: an object on a failed stream answers for its callback only, on purpose\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else "object")\n\tend\n\treturn true
