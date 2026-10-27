@@ -14,11 +14,11 @@ imported.
 
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
 and `conformance-controls/` (the unknown-operation control and the 15
-`*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.0.0 (merge `8dae4cc08b7b46c9b5fcf08dad5e99ad1348b76b`; the standard and the
-corpus at `dedf58efa93832fd243dbf3a2a1ca0a91c46b14b`). CI diffs them against
-the tag; a change arrives by re-vendoring from a new tag with
-`tools/revendor.sh <tag>`.
+`*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at commit
+`3617d3606db9c5686018d6568f0aa761869083c5`, the format 2.0.1 corpus (object
+read terminality, `3f40cb5f`; the standard is unchanged from v2.0.0). CI
+diffs them against the pin; a change arrives by re-vendoring from a new tag
+or commit with `tools/revendor.sh <ref>`.
 
 **Format 2.0.** The wire carries only integers and bytes, and every value has
 exactly one encoding (STANDARD.md, Format version). Against 1.1: `float` and

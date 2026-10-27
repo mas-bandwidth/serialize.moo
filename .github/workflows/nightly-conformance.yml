@@ -3,8 +3,8 @@
 # mas-bandwidth/serialize, not only to the copy vendored here.
 #
 # ci.yml proves the port against its vendored conformance/ and
-# conformance-controls/, and its corpus job holds those to the pinned release
-# (SERIALIZE_TAG). Nothing there notices when upstream main moves on: a vector
+# conformance-controls/, and its corpus job holds those to the pinned reference
+# (SERIALIZE_REF). Nothing there notices when upstream main moves on: a vector
 # added, a control's .expected changed, the standard revised. This job does.
 # It clones mas-bandwidth/serialize at main HEAD, builds the C++ reference and
 # runs its conformance ctest (its runner over the corpus and its negative
