@@ -755,7 +755,7 @@ end
 local function runSteps(s: any, steps: { { string } }, outcomes: { any }?, poison: boolean): boolean
 	local failed = false
 	local bitsAtFailure = 0
-	local function one(st: { string })
+	local function one(st: { string }): boolean
 		local before = s:bitsProcessed()
 		local ok, value = step(s, st)
 		if outcomes ~= nil then
@@ -769,6 +769,7 @@ local function runSteps(s: any, steps: { { string } }, outcomes: { any }?, poiso
 		elseif poison then
 			check(s:bitsProcessed() == bitsAtFailure and before == bitsAtFailure, "a step after a refusal consumed bits")
 		end
+		return ok
 	end
 	local i = 1
 	while i <= #steps do
@@ -778,24 +779,37 @@ local function runSteps(s: any, steps: { { string } }, outcomes: { any }?, poiso
 			if outcomes ~= nil then
 				table.insert(outcomes, { op = "object" })
 			end
-			-- the steps inside run through serializeObject, as a nested object
+			-- the steps inside run through serializeObject, as a nested object.
+			-- The callback answers for its own steps only, as a serialize
+			-- function does (an empty one returns true): whether the stream
+			-- was already failed is serializeObject's to decide, never the
+			-- callback's, or a control deleting that rule could not go red.
 			local inner = {}
 			for j = 1, n do
 				check(steps[i + j] ~= nil, "object step outruns the step list")
 				table.insert(inner, steps[i + j])
 			end
 			local object = {
-				serialize = function(_self: any, stream: any): boolean
+				serialize = function(_self: any, _stream: any): boolean
+					local all = true
 					for _, sub in inner do
-						one(sub)
+						if not one(sub) then
+							all = false
+						end
 					end
-					return stream:ok()
+					return all
 				end,
 			}
+			local before = s:bitsProcessed()
+			local failedBefore = failed
 			local okObject = s:serializeObject(object)
-			if not okObject and not failed then
+			if okObject then
+				check(not (failedBefore and poison), "an object after a refusal succeeded")
+			elseif not failed then
 				failed = true
 				bitsAtFailure = s:bitsProcessed()
+			elseif failedBefore and poison then
+				check(s:bitsProcessed() == bitsAtFailure and before == bitsAtFailure, "an object after a refusal consumed bits")
 			end
 			i += n
 		else

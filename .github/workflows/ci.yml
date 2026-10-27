@@ -113,8 +113,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 5
     env:
-      # A tag or a full commit; the format 2.0.1 corpus is pinned by commit.
-      SERIALIZE_REF: 3617d3606db9c5686018d6568f0aa761869083c5
+      # A tag or a full commit.
+      SERIALIZE_REF: v2.0.1
     steps:
       - uses: actions/checkout@v4
         with:
