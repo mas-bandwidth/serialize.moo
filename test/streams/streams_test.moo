@@ -232,10 +232,15 @@ function T.TestFixedNumberIsQ48_16()
 	check(a:bitsProcessed() == 21, "[-10,10] in Q48.16 is 21 bits, got " .. a:bitsProcessed())
 	-- an unsigned Q48.16 holds whole units to 2^48 - 1, past every moo number:
 	-- such bounds are misuse, or raw 2^63 + 65536 (bytes below) would read back
-	-- as a negative number inside [0, max]
+	-- as a negative number inside [0, max]. A write raises; a read refuses the
+	-- declaration as value_out_of_range before any bits move (U7, U16)
 	raises(function()
-		serialize.ReadStream.new(buffer.fromstring("\x00\x00\x01\x00\x00\x00\x00\x80")):serializeFixedNumber({ value = 0 }, 0, Int64.parse("281474976710655"))
+		serialize.WriteStream.new(buffer.create(8)):serializeFixedNumber({ value = 0 }, 0, Int64.parse("281474976710655"))
 	end, "serializeFixedNumber max must be at most 2^47 - 1")
+	local wide = serialize.ReadStream.new(buffer.fromstring("\x00\x00\x01\x00\x00\x00\x00\x80"))
+	local untouched = { value = 777 }
+	check(not wide:serializeFixedNumber(untouched, 0, Int64.parse("281474976710655")) and untouched.value == 777, "a read refuses bounds past every moo number")
+	check(wide:error() == E.ValueOutOfRange and wide:bitsProcessed() == 0, "refused as value_out_of_range, no bits moved")
 	-- at the widest legal bounds, [0, 2^47 - 1], the field is 63 bits and an
 	-- offset of 2^63 - 1 is past the range: refused, the holder untouched
 	local r = serialize.ReadStream.new(buffer.fromstring("\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x7F"))

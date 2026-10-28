@@ -80,4 +80,38 @@ end
 -- numbers (by the boundary rule) or Float32 values.
 S.compressedFloatParams = Stream.compressedFloatParams
 
+-- refusalName(reason): a latched reason's name as STANDARD.md spells it, or
+-- "none" for nil (IMPLEMENTING.md U14); stream:refusal() is the same for a
+-- stream. A value outside the closed list (an object's own error value) is
+-- the caller's refusal, named "rejected".
+S.refusalName = Stream.refusalName
+
+-- copyString(source, destSize): the reference's serialize_copy_string
+-- (IMPLEMENTING.md U15): source cut at its first zero byte and to at most
+-- destSize - 1 bytes, at a UTF-8 character boundary, so the result always fits
+-- a string field of buffer size destSize and stays well formed (U3). destSize
+-- is an integer of at least 1.
+function S.copyString(source: string, destSize: number): string
+	if type(source) ~= "string" then
+		error("serialize: copyString source must be a string", 2)
+	end
+	if type(destSize) ~= "number" or destSize ~= math.floor(destSize) or destSize < 1 then
+		error("serialize: copyString destSize must be an integer of at least 1", 2)
+	end
+	local nul = string.find(source, "\0", 1, true)
+	local n = if nul ~= nil then nul - 1 else #source
+	if n > destSize - 1 then
+		n = destSize - 1
+		-- step back over continuation bytes so no character is cut in two
+		while n > 0 and n < #source do
+			local c = string.byte(source, n + 1) :: number
+			if c < 0x80 or c >= 0xC0 then
+				break
+			end
+			n -= 1
+		end
+	end
+	return string.sub(source, 1, n)
+end
+
 return table.freeze(S)

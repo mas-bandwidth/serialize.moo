@@ -51,6 +51,8 @@ on a refusal.
 | `Uint64`, `Int64`, `Uint128`, `Int128` | the wide integers (below) |
 | `Float32` | a binary32 carried exactly (below) |
 | `bitsRequired`, `bitsRequired64`, `bitsRequired128`, `signedToUnsigned`, `unsignedToSigned`, `compressedFloatParams` | serialize.go's helpers |
+| `refusalName(reason)` | a reason's name as STANDARD.md spells it, `"none"` for nil (U14) |
+| `copyString(source, destSize)` | the reference's `serialize_copy_string` (U15): cut at the first zero byte and to `destSize - 1` bytes at a character boundary |
 
 | stream method | holder value | wire |
 |---|---|---|
@@ -81,22 +83,49 @@ on a refusal.
 | `reject()` | | the caller's refusal (read only; raises on a write or measure) |
 
 Every stream also has `reset`, `isWriting`, `isReading`, `error`, `ok`,
-`alignBits`, `bitsProcessed`, `bytesProcessed`, `setContext`, `context`; a
-WriteStream has `flush`, `data` and `bitsAvailable`.
+`refusal`, `fail`, `alignBits`, `bitsProcessed`, `bytesProcessed`,
+`setContext`, `context`; a WriteStream has `flush`, `data` and
+`bitsAvailable`. `reset` re-initializes a stream and clears its latch (U13).
+A WriteStream's buffer is unspecified until `flush`, which is required
+before `data` (U11).
+
+`stream:refusal()` is the latched reason's name, or `"none"` (U14); an
+object's own error value, which `error()` returns as given, is named
+`"rejected"`, so a refused stream never names none. `stream:fail(reason)` is
+the public refusal: on a read it latches `reason` through the one latch, and
+no reason or one outside the closed list latches `rejected`; on a write or a
+measure it records nothing and returns `false` (U6, U9).
 
 Wide parameters (`min`, `max` of int64, int128 and fixed) and wide values on
 write take the class or an integer-valued number; reads always produce the
 class. Compressed float parameters take a number (converted by the boundary
 rule) or a `Float32`.
 
-Misuse raises, naming the rule, with serialize.go's panic text, before
-anything else and even on a stream with a latched error. A value of a type
+Misuse on a write or a measure raises, naming the rule, with serialize.go's
+panic text, before anything else and even on a stream with a latched error:
+the raise is moo's one write-misuse mechanism (IMPLEMENTING.md U9). On a READ
+a bad caller declaration never raises (U7, U16): a bit count outside its
+range, int bounds outside int32 (U5), a ranged `min > max`, int64 or int128
+bounds the class does not hold, a fixed point Q format or bounds that do not
+fit, a `serializeFixedNumber` max past 2^47 - 1, an int_relative `previous`
+outside [0, 2147483647], a compressed float declaration that is not `min <
+max` and `res > 0`, precomputed constants whose `bits` is not
+`bitsRequired(0, maxIntegerValue)`, whose `maxIntegerValue` is outside [1,
+4294967040] or whose `delta` is not positive and finite, a string buffer size
+below 1, a bytes range outside its buffer, an object that is not one, and a
+ReadStream over data that is not a buffer: each is refused as
+`value_out_of_range` through the one latch before any bits move, so a stream
+that already failed keeps its first reason. A value of a type
 serialize.go's parameter could not hold raises `serialize: <method> <name>
 must be <type>`. A value the type holds but the operation refuses latches,
 exactly where serialize.go latches: past the buffer's end as `past_end`, a
 value outside its range as `value_out_of_range`, a non-finite float or double
-pattern as `non_finite_float`. moo has no assertion-off build, so the writer
-checks of IMPLEMENTING.md ("The check model") always run: a `serializeString`
+pattern as `non_finite_float`. A write checks room for the whole operation,
+length, align and payload, before it writes any of it (U10), and a value
+wider than its bit count raises, never masked (U8). `serializeEnd` on a write
+or a measure is a no-op returning true, whatever the stream's state (U12).
+moo has no assertion-off build, so the writer checks of IMPLEMENTING.md ("The
+check model") always run: a `serializeString`
 value that is not well-formed UTF-8 or holds a zero byte raises, as does a
 non-finite `compressed_float` value or a declaration whose top decode is not
 finite (below).
@@ -169,8 +198,9 @@ the int64 to float conversions), on edges and 16,000 seeded cases each way,
 through the streams themselves (`test/boundary`).
 
 A finite value the boundary cannot carry still travels: the **Bits forms**
-(`serializeFloatBits`, `serializeDoubleBits`, `serializeCompressedFloatBits`)
-move the IEEE pattern itself, byte for byte: -0, the subnormals and the values
+(`serializeFloatBits`, `serializeDoubleBits`, `serializeCompressedFloatBits`),
+moo's primary float API (IMPLEMENTING.md U15) and the forms the conformance
+runner drives, move the IEEE pattern itself, byte for byte: -0, the subnormals and the values
 past 2^47, which STANDARD.md requires a reader to return bit exact
 (float-negative-zero, double-smallest-positive-denormal, float-largest-finite
 and their neighbours) and no moo number can hold. Under format 2.0 they carry

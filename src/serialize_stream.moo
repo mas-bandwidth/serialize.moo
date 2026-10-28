@@ -9,6 +9,10 @@
 -- serialize.go's: raise on API misuse (before anything else, even on a stream
 -- with a latched error), refuse on a latched stream, the refusals, the bounds
 -- check of the whole width, then the bits; a read assigns its holder last.
+-- On a READ, a bad caller declaration (a bit count, a range, a Q format, a
+-- buffer size, a compressed float declaration) is refused as
+-- value_out_of_range through the one latch, never raised: a reader never
+-- traps (IMPLEMENTING.md U7, U16).
 --
 -- The writer is STRICT: serialize.go's bytes for the same values. A reader
 -- refuses everything STANDARD.md and serialize.go refuse, each refusal naming
@@ -112,11 +116,45 @@ local function wideArg(C: any, x: any, method: string, name: string): { number }
 	return x :: any
 end
 
-local function bitsArg(bits: any, max: number, message: string): number
-	if not isInteger(bits, 1, max) then
-		error(message, 3)
+-- misuse: a bad caller declaration (IMPLEMENTING.md U7, U16). On a read it is
+-- refused as value_out_of_range through the one latch, so a stream that already
+-- failed keeps its first reason, and returns false; on a write or a measure it
+-- raises message (moo's one write-misuse mechanism, U9), level counted from
+-- misuse's caller as error counts it.
+local function misuse(s: any, message: string, level: number): boolean
+	if s._kind == "read" then
+		return s:_fail(RANGE)
 	end
-	return bits
+	error(message, level + 1)
+end
+
+-- bitsArg: true when bits is an integer in [1, max]; else misuse.
+local function bitsArg(s: any, bits: any, max: number, message: string): boolean
+	if not isInteger(bits, 1, max) then
+		return misuse(s, message, 3)
+	end
+	return true
+end
+
+-- needDecl: need, for a declaration: misuse on a read refuses, never raises.
+local function needDecl(s: any, cond: boolean, method: string, name: string, kind: string): boolean
+	if not cond then
+		return misuse(s, "serialize: " .. method .. " " .. name .. " must be " .. kind, 3)
+	end
+	return true
+end
+
+-- wideDecl: wideArg, for a declaration: the limbs, or nil after misuse.
+local function wideDecl(s: any, C: any, x: any, method: string, name: string): { number }?
+	local ok = if type(x) == "number" then x == math.floor(x) and (C.signed or x >= 0) else C.is(x)
+	if not ok then
+		misuse(s, "serialize: " .. method .. " " .. name .. " must be " .. C.name .. " or an integer-valued number", 3)
+		return nil
+	end
+	if type(x) == "number" then
+		return Wide.fromNumber(x, C.limbs)
+	end
+	return x :: any
 end
 
 -- ---------------------------------------------------------------------------
@@ -253,9 +291,12 @@ local function fixedWidth(s: any, n: number, writeValue: () -> number): (boolean
 end
 
 function Shared.serializeBits(self: any, h: any, bits: number): boolean
-	bitsArg(bits, 32, RAISE_BITS_RANGE)
+	if not bitsArg(self, bits, 32, RAISE_BITS_RANGE) then
+		return false
+	end
 	if self._kind == "write" then
-		uintArg(h.value, 32, "serializeBits", "value")
+		-- the value must fit its width: masking is not checking (U8)
+		uintArg(h.value, bits, "serializeBits", "value")
 	end
 	local ok, v = fixedWidth(self, bits, function()
 		return bit32.band(h.value, MASK[bits])
@@ -267,10 +308,14 @@ function Shared.serializeBits(self: any, h: any, bits: number): boolean
 end
 
 function Shared.serializeBits64(self: any, h: any, bits: number): boolean
-	bitsArg(bits, 64, RAISE_BITS_RANGE64)
+	if not bitsArg(self, bits, 64, RAISE_BITS_RANGE64) then
+		return false
+	end
 	local limbs: { number }
 	if self._kind == "write" then
 		limbs = wideArg(Uint64, h.value, "serializeBits64", "value")
+		-- the value must fit its width: masking is not checking (U8)
+		need(Wide.bitLen(limbs, 2) <= bits, "serializeBits64", "value", "a uint" .. bits)
 	end
 	if self._error ~= nil then
 		return false
@@ -348,10 +393,15 @@ Shared.serializeUint128 = wideFixed(Uint128, 128, "serializeUint128")
 -- the bit length of max - min, computed in the unsigned domain.
 
 function Shared.serializeInt(self: any, h: any, min: number, max: number): boolean
-	int32Arg(min, "serializeInt", "min")
-	int32Arg(max, "serializeInt", "max")
+	-- int bounds are int32, judged on the caller's own values (U5); min <= max
+	if not needDecl(self, isInteger(min, -2147483648, 2147483647), "serializeInt", "min", "an int32") then
+		return false
+	end
+	if not needDecl(self, isInteger(max, -2147483648, 2147483647), "serializeInt", "max", "an int32") then
+		return false
+	end
 	if min > max then
-		error(RAISE_MIN_MAX, 2)
+		return misuse(self, RAISE_MIN_MAX, 2)
 	end
 	local diff = max - min
 	local bits = if diff == 0 then 0 else 32 - bit32.countlz(diff)
@@ -387,10 +437,16 @@ end
 local function ranged(C: any, name: string)
 	local n = C.limbs
 	return function(self: any, h: any, min: any, max: any): boolean
-		local lo = wideArg(C, min, name, "min")
-		local hi = wideArg(C, max, name, "max")
+		local lo = wideDecl(self, C, min, name, "min")
+		if lo == nil then
+			return false
+		end
+		local hi = wideDecl(self, C, max, name, "max")
+		if hi == nil then
+			return false
+		end
 		if Wide.cmpS(lo, hi, n) > 0 then
-			error(RAISE_MIN_MAX, 2)
+			return misuse(self, RAISE_MIN_MAX, 2)
 		end
 		local range = Wide.sub(hi, lo, n)
 		local bits = Wide.bitLen(range, n)
@@ -431,16 +487,27 @@ Shared.serializeInt128 = ranged(Int128, "serializeInt128")
 -- minimum, over bounds in whole units (serialize.go fixedPointParams64/128).
 
 -- fixedParams returns the raw minimum and raw range as limbs of the storage
--- width (2 or 4) and the bit count.
-local function fixedParams(width: number, integerBits: any, fractionBits: any, min: any, max: any, name: string): ({ number }, { number }, number)
-	need(isInteger(integerBits, -2147483648, 2147483647), name, "integerBits", "an integer")
-	need(isInteger(fractionBits, -2147483648, 2147483647), name, "fractionBits", "an integer")
-	local lo = wideArg(Int64, min, name, "min")
-	local hi = wideArg(Int64, max, name, "max")
+-- width (2 or 4) and the bit count, or nil after misuse (a read refuses).
+local function fixedParams(s: any, width: number, integerBits: any, fractionBits: any, min: any, max: any, name: string): ({ number }?, { number }?, number)
+	if not needDecl(s, isInteger(integerBits, -2147483648, 2147483647), name, "integerBits", "an integer") then
+		return nil, nil, 0
+	end
+	if not needDecl(s, isInteger(fractionBits, -2147483648, 2147483647), name, "fractionBits", "an integer") then
+		return nil, nil, 0
+	end
+	local lo = wideDecl(s, Int64, min, name, "min")
+	if lo == nil then
+		return nil, nil, 0
+	end
+	local hi = wideDecl(s, Int64, max, name, "max")
+	if hi == nil then
+		return nil, nil, 0
+	end
 	local total = integerBits + fractionBits
 	local fits = if width == 2 then total <= 64 else total == 128
 	if integerBits < 1 or fractionBits < 0 or not fits or Wide.cmpS(lo, hi, 2) > 0 then
-		error(RAISE_FIXED_PARAMS, 3)
+		misuse(s, RAISE_FIXED_PARAMS, 3)
+		return nil, nil, 0
 	end
 	-- fixedPointCapacity: the whole-unit bounds the Q format holds, signed when
 	-- min is negative (the sign bit counts toward integerBits)
@@ -458,7 +525,8 @@ local function fixedParams(width: number, integerBits: any, fractionBits: any, m
 		capHi = if integerBits >= 63 then { 4294967295, 2147483647 } else Wide.sub(Wide.shl({ 1, 0 }, integerBits, 2), { 1, 0 }, 2)
 	end
 	if Wide.cmpS(lo, capLo, 2) < 0 or Wide.cmpS(hi, capHi, 2) > 0 then
-		error(RAISE_FIXED_BOUNDS, 3)
+		misuse(s, RAISE_FIXED_BOUNDS, 3)
+		return nil, nil, 0
 	end
 	local function extend(x: { number }): { number }
 		if width == 2 then
@@ -483,7 +551,11 @@ end
 
 local function fixedMethod(C: any, width: number, name: string)
 	return function(self: any, h: any, integerBits: number, fractionBits: number, min: any, max: any): boolean
-		local rawMin, rawRange, bits = fixedParams(width, integerBits, fractionBits, min, max, name)
+		local rawMinOrNil, rawRangeOrNil, bits = fixedParams(self, width, integerBits, fractionBits, min, max, name)
+		if rawMinOrNil == nil or rawRangeOrNil == nil then
+			return false
+		end
+		local rawMin: { number }, rawRange: { number } = rawMinOrNil, rawRangeOrNil
 		if self._kind ~= "read" then
 			local v = wideArg(C, h.value, name, "value")
 			if self._error ~= nil then
@@ -527,8 +599,12 @@ function Shared.serializeFixedNumber(self: any, h: any, min: any, max: any): boo
 	-- the bounds must be moo numbers: an unsigned Q48.16 holds whole units to
 	-- 2^48 - 1, whose raw values past 2^63 have no moo number (and would read
 	-- back as negative numbers)
-	if Wide.cmpS(wideArg(Int64, max, "serializeFixedNumber", "max"), MAX_NUMBER_UNITS, 2) > 0 then
-		error("serialize: serializeFixedNumber max must be at most 2^47 - 1 whole units, the largest moo integer", 2)
+	local maxLimbs = wideDecl(self, Int64, max, "serializeFixedNumber", "max")
+	if maxLimbs == nil then
+		return false
+	end
+	if Wide.cmpS(maxLimbs, MAX_NUMBER_UNITS, 2) > 0 then
+		return misuse(self, "serialize: serializeFixedNumber max must be at most 2^47 - 1 whole units, the largest moo integer", 2)
 	end
 	local raw: any = nil
 	if self._kind ~= "read" then
@@ -553,13 +629,21 @@ end
 -- int_relative (STANDARD.md int_relative; serialize.go intRelativeBuckets).
 
 local BUCKETS = { { 2, 6 }, { 7, 23 }, { 24, 280 }, { 281, 4377 }, { 4378, 69914 } }
+
+local function bitsRequired32(min: number, max: number): number
+	local diff = max - min
+	if diff == 0 then
+		return 0
+	end
+	return 32 - bit32.countlz(diff)
+end
 local INT_RELATIVE_MAX = 2147483647
 local INT_RELATIVE_BOUNDED_MAX = 69914 -- the last bounded tier's top difference
 
 function Shared.serializeIntRelative(self: any, previous: number, h: any): boolean
-	int32Arg(previous, "serializeIntRelative", "previous")
-	if previous < 0 then
-		error(RAISE_INT_RELATIVE_DOMAIN, 2)
+	-- previous's domain is judged before anything narrows it (U16)
+	if not isInteger(previous, 0, 2147483647) then
+		return misuse(self, RAISE_INT_RELATIVE_DOMAIN, 2)
 	end
 	if self._kind ~= "read" then
 		local current = int32Arg(h.value, "serializeIntRelative", "value")
@@ -570,6 +654,22 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 			return self:_fail(RANGE)
 		end
 		local difference = current - previous
+		-- room for the whole tier before its first bit (U10): the unary
+		-- flags, then the tier's field
+		local total = 6 + 32
+		if difference == 1 then
+			total = 1
+		else
+			for k, bucket in BUCKETS do
+				if difference <= bucket[2] then
+					total = 1 + k + bitsRequired32(bucket[1], bucket[2])
+					break
+				end
+			end
+		end
+		if not self:_room(total) then
+			return self:_fail(PAST_END)
+		end
 		if not self:serializeBool({ value = difference == 1 }) then
 			return false
 		end
@@ -756,20 +856,13 @@ local F_HALF = 0x3F000000
 local F_ONE = 0x3F800000
 local F_MAX_VALUES = 0x4F7FFFFF -- 4294967040, the largest float32 below 2^32
 
-local function bitsRequired32(min: number, max: number): number
-	local diff = max - min
-	if diff == 0 then
-		return 0
-	end
-	return 32 - bit32.countlz(diff)
-end
-
 -- compressedFloatParams(min, max, res): the declaration's wire constants as
--- (maxIntegerValue, bits, delta float32 bits). min, max and res are float32
--- bit patterns.
-local function compressedFloatParams(min: number, max: number, res: number): (number, number, number)
+-- (maxIntegerValue, bits, delta float32 bits), or nil for a declaration that
+-- is not min < max and res > 0 (the caller decides: raise, or refuse on a
+-- read). min, max and res are float32 bit patterns.
+local function compressedFloatParams(min: number, max: number, res: number): (number?, number, number)
 	if not Float.lt(min, max) or not Float.lt(0, res) then
-		error(RAISE_FLOAT_PARAMS, 3)
+		return nil, 0, 0
 	end
 	local delta = Float.fsub(max, min)
 	local values = Float.fdiv(delta, res)
@@ -782,10 +875,14 @@ local function compressedFloatParams(min: number, max: number, res: number): (nu
 	return maxIntegerValue, bitsRequired32(0, maxIntegerValue), delta
 end
 
-local function validatePrecomputed(maxIntegerValue: number, bits: number, delta: number)
-	if maxIntegerValue == 0 or bits ~= bitsRequired32(0, maxIntegerValue) or not Float.lt(0, delta) or not Float.isFinite(delta) then
-		error(RAISE_PRECOMPUTED, 3)
-	end
+-- precomputedOk: what the precomputed constants can be checked for without
+-- the declaration they came from (U16): bits is bitsRequired(0,
+-- maxIntegerValue), maxIntegerValue lies in [1, 4294967040] (the largest a
+-- declaration derives), and delta is positive and finite.
+local MAX_INTEGER_VALUE = 4294967040
+
+local function precomputedOk(maxIntegerValue: number, bits: number, delta: number): boolean
+	return maxIntegerValue >= 1 and maxIntegerValue <= MAX_INTEGER_VALUE and bits == bitsRequired32(0, maxIntegerValue) and Float.lt(0, delta) and Float.isFinite(delta)
 end
 
 -- compressed runs the shared arm. valueBits is the value to write as float32
@@ -868,20 +965,37 @@ end
 local function compressedMethod(asBits: boolean, precomputed: boolean, name: string)
 	return function(self: any, h: any, a: any, b: any, c: any, d: any): boolean
 		local maxIntegerValue: number, bits: number, delta: number, min: number
+		-- every declaration is checked before any bits move; on a read a bad
+		-- one is refused (U7, U16)
 		if precomputed then
 			-- (maxIntegerValue, bits, delta, min)
-			maxIntegerValue = uintArg(a, 32, name, "maxIntegerValue")
-			need(isInteger(b, -2147483648, 2147483647), name, "bits", "an integer")
-			bits = b
-			delta = Float.float32Bits(c, name .. " delta")
-			min = Float.float32Bits(d, name .. " min")
-			validatePrecomputed(maxIntegerValue, bits, delta)
+			if not needDecl(self, isInteger(a, 0, 4294967295), name, "maxIntegerValue", "a uint32") then
+				return false
+			end
+			if not needDecl(self, isInteger(b, -2147483648, 2147483647), name, "bits", "an integer") then
+				return false
+			end
+			local db, mb = Float.toFloat32Bits(c), Float.toFloat32Bits(d)
+			if not needDecl(self, db ~= nil, name, "delta", "a number or a Float32") or not needDecl(self, mb ~= nil, name, "min", "a number or a Float32") then
+				return false
+			end
+			maxIntegerValue, bits, delta, min = a, b, db :: number, mb :: number
+			if not precomputedOk(maxIntegerValue, bits, delta) then
+				return misuse(self, RAISE_PRECOMPUTED, 2)
+			end
 		else
 			-- (min, max, res)
-			min = Float.float32Bits(a, name .. " min")
-			local max = Float.float32Bits(b, name .. " max")
-			local res = Float.float32Bits(c, name .. " res")
-			maxIntegerValue, bits, delta = compressedFloatParams(min, max, res)
+			local mnb, mxb, rb = Float.toFloat32Bits(a), Float.toFloat32Bits(b), Float.toFloat32Bits(c)
+			if not needDecl(self, mnb ~= nil, name, "min", "a number or a Float32") or not needDecl(self, mxb ~= nil, name, "max", "a number or a Float32") or not needDecl(self, rb ~= nil, name, "res", "a number or a Float32") then
+				return false
+			end
+			min = mnb :: number
+			local m: number?
+			m, bits, delta = compressedFloatParams(min, mxb :: number, rb :: number)
+			if m == nil then
+				return misuse(self, RAISE_FLOAT_PARAMS, 2)
+			end
+			maxIntegerValue = m
 		end
 		local valueBits = compressedValue(self, h, asBits, name)
 		local ok, decoded = compressed(self, valueBits, maxIntegerValue, bits, delta, min)
@@ -941,10 +1055,26 @@ end
 -- the buffer (all of it by default); a read fills them. Both sides know the
 -- length: it is not sent.
 function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: number?): boolean
-	need(type(data) == "buffer", "serializeBytes", "data", "a buffer")
+	-- the destination's own capacity bounds the declaration; on a read a range
+	-- outside it, a negative count included, is refused (U7, U16)
+	if not needDecl(self, type(data) == "buffer", "serializeBytes", "data", "a buffer") then
+		return false
+	end
 	local off = offset or 0
-	local cnt = count or (buffer.len(data) - off)
-	need(isInteger(off, 0, buffer.len(data)) and isInteger(cnt, 0, buffer.len(data) - off), "serializeBytes", "offset and count", "a range inside the buffer")
+	local cnt = count or (buffer.len(data) - (if type(off) == "number" then off else 0))
+	if not needDecl(self, isInteger(off, 0, buffer.len(data)) and isInteger(cnt, 0, buffer.len(data) - off), "serializeBytes", "offset and count", "a range inside the buffer") then
+		return false
+	end
+	-- a write checks room for the align and the payload together before it
+	-- writes either (U10)
+	if self._kind == "write" then
+		if self._error ~= nil then
+			return false
+		end
+		if not self:_room((8 - self._bits % 8) % 8 + cnt * 8) then
+			return self:_fail(PAST_END)
+		end
+	end
 	if not self:serializeAlign() then
 		return false
 	end
@@ -960,10 +1090,11 @@ function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: 
 	return true
 end
 
-local function bufferSizeArg(bufferSize: any)
+local function bufferSizeArg(s: any, bufferSize: any): boolean
 	if not isInteger(bufferSize, 1, 2147483647) then
-		error(RAISE_BUFFER_SIZE, 3)
+		return misuse(s, RAISE_BUFFER_SIZE, 3)
 	end
+	return true
 end
 
 -- validUtf8 is Go's utf8.Valid: no overlong forms, no surrogates, nothing
@@ -1019,7 +1150,9 @@ end
 -- refuses a zero byte (embedded_nul) BEFORE it checks the encoding
 -- (invalid_utf8), so a payload breaking both is embedded_nul.
 function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
-	bufferSizeArg(bufferSize)
+	if not bufferSizeArg(self, bufferSize) then
+		return false
+	end
 	if self._kind ~= "read" then
 		need(type(h.value) == "string", "serializeString", "value", "a string")
 		if string.find(h.value, "\0", 1, true) ~= nil or not validUtf8(h.value) then
@@ -1031,6 +1164,16 @@ function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 		local s: string = h.value
 		if #s >= bufferSize then
 			return self:_fail(RANGE)
+		end
+		-- room for the length, the align and the payload together before the
+		-- first bit of any of them (U10)
+		local lengthBits = bitsRequired32(0, bufferSize - 1)
+		local pad = (8 - (self._bits + lengthBits) % 8) % 8
+		if self._kind == "measure" then
+			pad = 7
+		end
+		if not self:_room(lengthBits + pad + #s * 8) then
+			return self:_fail(PAST_END)
 		end
 		if not self:serializeInt({ value = #s }, 0, bufferSize - 1) then
 			return false
@@ -1079,14 +1222,15 @@ end
 -- whole byte or more left over as trailing_data, checked FIRST, then reads the
 -- final byte's 0 to 7 unused bits and refuses a set one as nonzero_padding; an
 -- accepted end leaves bitsProcessed() at 8 times the byte count. On a failed
--- stream it is refused with the first refusal's reason. A write or a measure
+-- read stream it is refused with the first refusal's reason. On a write or a
+-- measure it is a no-op returning true, whatever the stream's state (U12): it
 -- emits nothing and costs nothing.
 function Shared.serializeEnd(self: any): boolean
-	if self._error ~= nil then
-		return false
-	end
 	if self._kind ~= "read" then
 		return true
+	end
+	if self._error ~= nil then
+		return false
 	end
 	local remaining = self._numBits - self._bits
 	if remaining >= 8 then
@@ -1109,7 +1253,7 @@ end
 function Shared.serializeObject(self: any, object: any): boolean
 	local method: any = if type(object) == "table" then object.serialize else nil
 	if type(method) ~= "function" then
-		error(RAISE_NOT_AN_OBJECT, 2)
+		return misuse(self, RAISE_NOT_AN_OBJECT, 2)
 	end
 	if self._error ~= nil then
 		return false
@@ -1133,6 +1277,42 @@ function Shared.reject(self: any): boolean
 		error(RAISE_REJECT_NOT_READ, 2)
 	end
 	return self:_fail(REJECTED)
+end
+
+-- refusalName(reason): the name of a latched reason, as STANDARD.md spells it,
+-- or "none" for no refusal (IMPLEMENTING.md U14). An object's own error value
+-- (serializeObject latches it) is outside the closed list: it is the caller
+-- refusing, so it is named rejected, and a refused stream never names none.
+local CLOSED: { [any]: boolean } = {}
+for _, reason in Refusal :: any do
+	CLOSED[reason] = true
+end
+
+local function refusalName(reason: any): string
+	if reason == nil then
+		return "none"
+	end
+	if CLOSED[reason] then
+		return reason
+	end
+	return REJECTED
+end
+
+-- refusal(): the stream's refusal name, or "none" (U14).
+function Shared.refusal(self: any): string
+	return refusalName(self._error)
+end
+
+-- fail(reason): the public refusal (U14). On a read it latches reason through
+-- the one latch, so the first reason wins; no reason, or one outside the
+-- closed list, latches rejected (never none: a refused stream that reported
+-- none would be relabelled past_end by the next read). On a write or a measure
+-- it records nothing and returns false (U6, U9).
+function Shared.fail(self: any, reason: any?): boolean
+	if self._kind ~= "read" then
+		return false
+	end
+	return self:_fail(if reason ~= nil and CLOSED[reason] then reason else REJECTED)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1197,9 +1377,15 @@ end
 
 -- reset points the stream at data and clears all read state, including a
 -- latched error (STANDARD.md: a failure persists until re-initialization).
+-- Data that is not a buffer is caller misuse on a read: the stream starts
+-- refused as value_out_of_range over no bytes, never a raise (U7).
 function ReadStream.reset(self: any, data: buffer)
 	if type(data) ~= "buffer" then
-		error("serialize: ReadStream data must be a buffer", 2)
+		self._numBits = 0
+		self._bits = 0
+		self._reader = Bitpacker.BitReader.new(buffer.create(0))
+		self._error = RANGE
+		return
 	end
 	self._numBits = buffer.len(data) * 8
 	self._bits = 0
@@ -1241,6 +1427,9 @@ end
 -- constants as (maxIntegerValue, bits, delta as a Float32)
 local function publicCompressedFloatParams(min: any, max: any, res: any): (number, number, any)
 	local m, b, d = compressedFloatParams(Float.float32Bits(min, "compressedFloatParams min"), Float.float32Bits(max, "compressedFloatParams max"), Float.float32Bits(res, "compressedFloatParams res"))
+	if m == nil then
+		error(RAISE_FLOAT_PARAMS, 2)
+	end
 	return m, b, Float.Float32.fromBits(d)
 end
 
@@ -1263,6 +1452,7 @@ return table.freeze({
 	Until = Until,
 	compressedFloatParams = publicCompressedFloatParams,
 	bitsRequired = bitsRequired,
+	refusalName = refusalName,
 	_compressedFloatParamsBits = compressedFloatParams,
 	_validUtf8 = validUtf8,
 })
