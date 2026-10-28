@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/big"
 	"math/bits"
 	"math/rand/v2"
 	"os"
@@ -54,7 +55,7 @@ const (
 
 // every operation the generator must exercise in a round
 var allOps = []string{"b", "b64", "bl", "u8", "u16", "u32", "u64", "u128", "i", "i64", "i128",
-	"fx", "f128", "fn", "ir", "f", "d", "cf", "cfp", "by", "s", "al", "ob"}
+	"fx", "f128", "fn", "ir", "f", "d", "cf", "cfp", "fN", "dN", "cfN", "cfpN", "by", "s", "al", "ob"}
 
 // step is one operation. Every number is carried as uint32 words, low first;
 // a signed value is its two's complement pattern. by and s carry their payload.
@@ -238,6 +239,85 @@ func compressedDecl(r *rand.Rand) []uint32 {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// the float boundary (DESIGN.md, "The float boundary"): the number forms carry a
+// moo number, Q48.16 fixed point, across the IEEE wire. The Go side emulates
+// the rule exactly, so serialize.go's float32 and float64 stand in for the moo
+// numbers: number -> wire is the IEEE value nearest raw / 2^16, ties to even;
+// wire -> number is round(x * 2^16), ties to even, refused when outside
+// [-(2^63 - 1), 2^63 - 1].
+
+// rawValue is the exact value raw / 2^16.
+func rawValue(raw int64) *big.Float {
+	f := new(big.Float).SetPrec(64).SetInt64(raw)
+	return f.SetMantExp(f, -16)
+}
+
+func float32OfRaw(raw int64) float32 {
+	f, _ := rawValue(raw).Float32() // nearest, ties to even
+	return f
+}
+
+func float64OfRaw(raw int64) float64 {
+	f, _ := rawValue(raw).Float64()
+	return f
+}
+
+// rawOfFloat is the moo number a finite IEEE value x reads as, and false when
+// the boundary refuses it.
+func rawOfFloat(x float64) (int64, bool) {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return 0, false
+	}
+	f := new(big.Float).SetPrec(2048).SetFloat64(x)
+	f.SetMantExp(f, 16)
+	t, _ := f.Int(nil) // toward zero
+	frac := new(big.Float).SetPrec(2048).Sub(f, new(big.Float).SetPrec(2048).SetInt(t))
+	half := big.NewFloat(0.5)
+	switch c := new(big.Float).Abs(frac).Cmp(half); {
+	case c > 0 || (c == 0 && t.Bit(0) == 1):
+		if frac.Sign() > 0 {
+			t.Add(t, big.NewInt(1))
+		} else {
+			t.Sub(t, big.NewInt(1))
+		}
+	}
+	limit := new(big.Int).SetInt64(math.MaxInt64)
+	if t.CmpAbs(limit) > 0 {
+		return 0, false
+	}
+	return t.Int64(), true
+}
+
+// randRaw is a moo number's raw Q48.16 bits: any int64 but -2^63, small and
+// large magnitudes, whole numbers and fractions.
+func randRaw(r *rand.Rand) int64 {
+	v := int64(width(r) >> 1)
+	switch r.IntN(4) {
+	case 0:
+		v &^= 0xffff // a whole number
+	case 1:
+		v >>= r.IntN(48) // a small one
+	}
+	if r.IntN(2) == 0 {
+		v = -v
+	}
+	return v
+}
+
+// numberToken is the read token of a number-form step: the moo number's raw
+// bits, or the boundary's refusal.
+func numberToken(x float64, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	raw, ok := rawOfFloat(x)
+	if !ok {
+		return "", serialize.ErrValueOutOfRange
+	}
+	return wide64(uint64(raw)), nil
+}
+
 func genStep(r *rand.Rand, op string) step {
 	st := step{op: op}
 	switch op {
@@ -361,6 +441,17 @@ func genStep(r *rand.Rand, op string) step {
 		st.w = words64(u)
 	case "cf", "cfp":
 		st.w = compressedDecl(r)
+	case "fN", "dN":
+		st.w = words64(uint64(randRaw(r)))
+	case "cfN", "cfpN":
+		// the number nearest the declaration's value (a value the boundary
+		// refuses is replaced by any moo number: it clamps)
+		d := compressedDecl(r)
+		raw, ok := rawOfFloat(float64(math.Float32frombits(d[0])))
+		if !ok {
+			raw = randRaw(r)
+		}
+		st.w = cat(words64(uint64(raw)), d[1:])
 	case "by":
 		st.payload = make([]byte, r.IntN(65))
 		for i := range st.payload {
@@ -629,6 +720,50 @@ func run(s serialize.Stream, st step) (string, error) {
 			err = s.SerializeCompressedFloat32Precomputed(&v, maxIntegerValue, nbits, delta, mn)
 		}
 		return x32(math.Float32bits(v)), err
+	case "fN":
+		var v float32
+		if writing {
+			v = float32OfRaw(int64(s64(w, 0)))
+		}
+		err := s.SerializeFloat32(&v)
+		if writing {
+			return "", err
+		}
+		return numberToken(float64(v), err)
+	case "dN":
+		var v float64
+		if writing {
+			v = float64OfRaw(int64(s64(w, 0)))
+		}
+		err := s.SerializeFloat64(&v)
+		if writing {
+			return "", err
+		}
+		return numberToken(v, err)
+	case "cfN", "cfpN":
+		var v float32
+		if writing {
+			v = float32OfRaw(int64(s64(w, 0)))
+		}
+		mn, mx, res := math.Float32frombits(w[2]), math.Float32frombits(w[3]), math.Float32frombits(w[4])
+		var err error
+		if st.op == "cfN" {
+			err = s.SerializeCompressedFloat32(&v, mn, mx, res)
+		} else {
+			maxIntegerValue, nbits, delta := serialize.CompressedFloatParams(mn, mx, res)
+			switch s := s.(type) {
+			case *serialize.WriteStream:
+				err = s.SerializeCompressedFloat32Precomputed(&v, maxIntegerValue, nbits, delta, mn)
+			case *serialize.ReadStream:
+				err = s.SerializeCompressedFloat32Precomputed(&v, maxIntegerValue, nbits, delta, mn)
+			case *serialize.MeasureStream:
+				err = s.SerializeCompressedFloat32Precomputed(&v, maxIntegerValue, nbits, delta, mn)
+			}
+		}
+		if writing {
+			return "", err
+		}
+		return numberToken(float64(v), err)
 	case "by":
 		data := make([]byte, len(st.payload))
 		if writing {
@@ -706,9 +841,10 @@ func expected(p program) string {
 	toks := make([]string, 0, len(p.steps)+1)
 	for _, st := range p.steps {
 		var tok string
-		if st.op == "cf" || st.op == "cfp" {
-			// a compressed float reads back as its quantized decode: serialize.go's
-			// round trip of the step alone
+		if st.op == "cf" || st.op == "cfp" || st.op == "fN" || st.op == "dN" || st.op == "cfN" || st.op == "cfpN" {
+			// a compressed float reads back as its quantized decode, and a number
+			// form as the number nearest the IEEE value it was written as:
+			// serialize.go's round trip of the step alone
 			one := program{steps: []step{st}}
 			b, _ := goWrite(one)
 			tok = strings.Fields(goRead(one, b))[0]

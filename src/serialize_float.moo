@@ -179,6 +179,35 @@ local function roundPack(sign: number, sig: number, exp: number): number
 	return signBits + q -- subnormal or zero (lsbExp is -149)
 end
 
+-- alignAdd(ma, ea, mb, eb): |a| >= |b| as integers A and B over one exponent,
+-- A + B and A - B exact in a moo number (both below 2^47, the largest moo
+-- integer being 2^47 - 1: a sum past it saturates, the audit of 2026-10-27).
+local function alignAdd(ma: number, ea: number, mb: number, eb: number): (number, number, number)
+	local diff = ea - eb
+	if diff <= 22 then
+		-- exact: ma * 2^diff < 2^46
+		return ma * POW2[diff], mb, eb
+	end
+	-- a is normal (b's exponent is at least -149, 23 binades below), so
+	-- 2^23 <= ma < 2^24: a in units of 2^(ea - 22) is ma * 2^22, in [2^45,
+	-- 2^46). b shifted into units of 2^(ea - 21) (drop >= 2), then doubled
+	-- with every dropped bit folded into the new last bit (a sticky bit): B <
+	-- 2^23 + 2, so A + B < 2^47 and never saturates. An odd B is strictly
+	-- between two values, so no tie is invented, and its last bit sits 22
+	-- bits below a's last bit; the sum or difference has at least 45 bits, so
+	-- roundPack drops at least 21 of them and the sticky bit lies below its
+	-- half-way bit.
+	local drop = diff - 21
+	local kept: number, lost: boolean
+	if drop >= 25 then
+		kept, lost = 0, mb ~= 0
+	else
+		kept = mb // POW2[drop]
+		lost = kept * POW2[drop] ~= mb
+	end
+	return ma * POW2[22], kept * 2 + (if lost then 1 else 0), ea - 22
+end
+
 -- fadd(a, b): a + b in binary32, rounded to nearest even.
 local function fadd(a: number, b: number): number
 	if isNaN(a) or isNaN(b) then
@@ -200,31 +229,7 @@ local function fadd(a: number, b: number): number
 		sa, ma, ea, sb, mb, eb = sb, mb, eb, sa, ma, ea
 	end
 	-- |a| >= |b| now
-	local diff = ea - eb
-	local A: number, B: number, exp: number
-	if diff <= 22 then
-		-- exact: ma * 2^diff < 2^46
-		A = ma * POW2[diff]
-		B = mb
-		exp = eb
-	else
-		-- a in units of 2^(ea - 23): ma * 2^23 < 2^47, exact. b shifted into
-		-- units of 2^(ea - 22), then doubled with every dropped bit folded
-		-- into the new last bit (a sticky bit): an odd B is strictly between
-		-- two values, so no tie is invented, and its last bit sits 22 bits
-		-- below a's last bit, far under any rounding position
-		local drop = diff - 22
-		local kept: number, lost: boolean
-		if drop >= 25 then
-			kept, lost = 0, mb ~= 0
-		else
-			kept = mb // POW2[drop]
-			lost = kept * POW2[drop] ~= mb
-		end
-		A = ma * POW2[23]
-		B = kept * 2 + (if lost then 1 else 0)
-		exp = ea - 23
-	end
+	local A, B, exp = alignAdd(ma, ea, mb, eb)
 	if sa == sb then
 		return roundPack(sa, A + B, exp)
 	end
@@ -372,6 +377,8 @@ F.isNaN = isNaN
 F.isInf = isInf
 F.isFinite = isFinite
 F.fadd = fadd
+F._unpack = unpack -- the white-box tests (test/softfloat) only
+F._alignAdd = alignAdd
 F.fsub = fsub
 F.fmul = fmul
 F.fdiv = fdiv
