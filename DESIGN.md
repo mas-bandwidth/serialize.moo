@@ -28,8 +28,8 @@ finite is refused; `int_relative`'s absolute tier is canonical; `end` is new;
 `wstring` is gone; and every refusal names its reason. Every finite value 1.1
 could carry keeps its exact bytes.
 
-**The moo pin.** moo release v1.2.1
-(`7c0ff3e83d8e7f4a71f4b06c9530862197271d41`, the commit the tag names): the
+**The moo pin.** moo release v1.3.0
+(`f60f0239f41c6c0a827ecee44a7f9539c5798068`, the commit the tag names): the
 number is Q48.16 and saturates (layer 3b), with the math library and moo's
 conformance on it. `make dist-moo` builds `moo` and `moo-analyze` from that
 commit and refuses any other.
