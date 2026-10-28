@@ -618,16 +618,25 @@ end
 
 F.Float32 = table.freeze(Float32)
 
--- float32Bits(x, what): the binary32 bits of a parameter given as a Float32
--- or a number (the number by the boundary rule). Raises naming what.
-function F.float32Bits(x: any, what: string): number
+-- toFloat32Bits(x): the binary32 bits of a parameter given as a Float32 or a
+-- number (the number by the boundary rule), or nil for anything else.
+function F.toFloat32Bits(x: any): number?
 	if type(x) == "number" then
 		return toFloatBits(x)
 	end
 	if getmetatable(x) == meta then
 		return x.bits
 	end
-	error("serialize: " .. what .. " must be a number or a Float32", 3)
+	return nil
+end
+
+-- float32Bits(x, what): toFloat32Bits, raising naming what for anything else.
+function F.float32Bits(x: any, what: string): number
+	local bits = F.toFloat32Bits(x)
+	if bits == nil then
+		error("serialize: " .. what .. " must be a number or a Float32", 3)
+	end
+	return bits
 end
 
 return table.freeze(F)
