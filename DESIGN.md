@@ -15,7 +15,8 @@ imported.
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
 and `conformance-controls/` (the unknown-operation control and the 18
 `*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.1.0 (`884bc3098c9619d67308d9c6b5cdf38593d98b69`; format 2.0, standard 2.1:
+v2.1.1 (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`; the rulings on U9 and
+U15 over v2.1.0, format 2.0, standard 2.1:
 the `rejected` refusal reason, its `reject` vectors and controls, and the
 uniform rules U1 to U16 in IMPLEMENTING.md). CI diffs them against the tag; a
 change arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
@@ -52,7 +53,7 @@ on a refusal.
 | `Float32` | a binary32 carried exactly (below) |
 | `bitsRequired`, `bitsRequired64`, `bitsRequired128`, `signedToUnsigned`, `unsignedToSigned`, `compressedFloatParams` | serialize.go's helpers |
 | `refusalName(reason)` | a reason's name as STANDARD.md spells it, `"none"` for nil (U14) |
-| `copyString(source, destSize)` | the reference's `serialize_copy_string` (U15): cut at the first zero byte and to `destSize - 1` bytes at a character boundary |
+| `copyString(source, destSize)` | the reference's `serialize_copy_string` (U15, v2.1.1), defined on bytes: the bytes before the first zero byte, cut to `destSize - 1`, then backed off while the first byte left out is a continuation byte (`10xxxxxx`) |
 
 | stream method | holder value | wire |
 |---|---|---|
@@ -117,10 +118,15 @@ ReadStream over data that is not a buffer: each is refused as
 `value_out_of_range` through the one latch before any bits move, so a stream
 that already failed keeps its first reason. A value of a type
 serialize.go's parameter could not hold raises `serialize: <method> <name>
-must be <type>`. A value the type holds but the operation refuses latches,
-exactly where serialize.go latches: past the buffer's end as `past_end`, a
-value outside its range as `value_out_of_range`, a non-finite float or double
-pattern as `non_finite_float`. A write checks room for the whole operation,
+must be <type>`. A value the type holds but the operation cannot carry is
+write misuse too, and traps the same way, never latching (IMPLEMENTING.md
+v2.1.1, U9): a write past the room left in the buffer, a value outside its
+range, a non-finite float, double or compressed_float value, a string past its
+buffer size, and a compressed_float declaration whose `delta` or `delta / res`
+is not finite in float32 (never clamped on a write or a measure; a read clamps
+it, as every reader does). A write or a measure stream has no refusal state:
+misuse records nothing, and a later operation succeeds. A measure makes every
+check a write makes except the room (U6). A write checks room for the whole operation,
 length, align and payload, before it writes any of it (U10), and a value
 wider than its bit count raises, never masked (U8). `serializeEnd` on a write
 or a measure is a no-op returning true, whatever the stream's state (U12).
@@ -147,7 +153,8 @@ other misuse does. `serializeObject` latches `rejected` when the object's
 `serialize` returns `false` with no error value of its own (2.0 latched the
 string `"object"`), and the object's own error value when it gives one,
 through the same latch, so a reason a primitive inside the object latched
-first is kept.
+first is kept. On a write or a measure a failing object returns `false` and
+records nothing (U9, U6).
 
 ## The number model
 
@@ -206,8 +213,7 @@ past 2^47, which STANDARD.md requires a reader to return bit exact
 and their neighbours) and no moo number can hold. Under format 2.0 they carry
 **finite patterns only**: a pattern whose exponent field is all ones is refused
 on read as `non_finite_float`, tested on the raw bits before the holder is
-written, and latched as `non_finite_float` on write and measure, as
-serialize.go's writer does. Under 1.1 they also relayed NaN payloads and the
+written, and trapped on write and measure as write misuse (U9). Under 1.1 they also relayed NaN payloads and the
 infinities; that is gone, and no non-finite pattern travels through any form.
 
 ## Float32 arithmetic
@@ -263,9 +269,9 @@ packet.
 
 ## Writer and reader
 
-**The writer is strict:** serialize.go's bytes for the same values; it latches
-where serialize.go's WriteStream returns an error and writes nothing on a
-refusal (every bounds check covers the whole operation before a bit moves).
+**The writer is strict:** serialize.go's bytes for the same values; it traps
+on write misuse, never latching, and writes nothing then (every bounds check
+covers the whole operation before a bit moves).
 
 **The reader refuses** everything STANDARD.md and serialize.go refuse, each
 for its reason: past the end (`past_end`); an offset outside its range, a

@@ -75,6 +75,7 @@ local RAISE_BUFFER_SIZE = "serialize: string buffer size must be in [1,1<<31)"
 local RAISE_FLOAT_PARAMS = "serialize: compressed float requires min < max and resolution > 0"
 local RAISE_PRECOMPUTED = "serialize: precomputed compressed float constants must be exactly what CompressedFloatParams derives"
 local RAISE_NOT_FINITE = "serialize: compressed float value must be finite"
+local RAISE_DECLARATION_FINITE = "serialize: compressed float declaration's delta and delta / res must be finite in float32"
 local RAISE_COMPRESSED_DECODE = "serialize: compressed float declaration decodes its top integer to a value that is not finite"
 local RAISE_STRING_TEXT = "serialize: serializeString value must be well-formed UTF-8 with no zero byte"
 local RAISE_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes"
@@ -198,8 +199,21 @@ function Shared.context(self: any): any
 	return self._context
 end
 
--- the latch (STANDARD.md, Reader Obligations, failure is terminal)
+-- the latch (STANDARD.md, Reader Obligations, failure is terminal). Only a
+-- read latches. On a write or a measure every path here is write misuse (a
+-- value out of range, a non-finite float, a string past its buffer, a write
+-- past the room left), which traps and never latches (IMPLEMENTING.md U9, U6):
+-- a write or measure stream has no refusal state for misuse to set.
+local TRAP: { [string]: string } = {
+	past_end = "serialize: the write does not fit the room left in the buffer",
+	value_out_of_range = "serialize: the value is out of range for its declaration",
+	non_finite_float = "serialize: a float or double value must be finite",
+}
+
 function Shared._fail(self: any, kind: any): boolean
+	if self._kind ~= "read" then
+		error(TRAP[kind] or ("serialize: write misuse (" .. tostring(kind) .. ")"), 3)
+	end
 	if self._error == nil then
 		self._error = kind
 	end
@@ -294,8 +308,9 @@ function Shared.serializeBits(self: any, h: any, bits: number): boolean
 	if not bitsArg(self, bits, 32, RAISE_BITS_RANGE) then
 		return false
 	end
-	if self._kind == "write" then
-		-- the value must fit its width: masking is not checking (U8)
+	if self._kind ~= "read" then
+		-- the value must fit its width: masking is not checking (U8); a
+		-- measure checks what a write checks (U6)
 		uintArg(h.value, bits, "serializeBits", "value")
 	end
 	local ok, v = fixedWidth(self, bits, function()
@@ -312,7 +327,7 @@ function Shared.serializeBits64(self: any, h: any, bits: number): boolean
 		return false
 	end
 	local limbs: { number }
-	if self._kind == "write" then
+	if self._kind ~= "read" then
 		limbs = wideArg(Uint64, h.value, "serializeBits64", "value")
 		-- the value must fit its width: masking is not checking (U8)
 		need(Wide.bitLen(limbs, 2) <= bits, "serializeBits64", "value", "a uint" .. bits)
@@ -332,7 +347,7 @@ function Shared.serializeBits64(self: any, h: any, bits: number): boolean
 end
 
 function Shared.serializeBool(self: any, h: any): boolean
-	if self._kind == "write" then
+	if self._kind ~= "read" then
 		need(type(h.value) == "boolean", "serializeBool", "value", "a boolean")
 	end
 	local ok, v = fixedWidth(self, 1, function()
@@ -346,7 +361,7 @@ end
 
 local function uintMethod(bits: number, name: string)
 	return function(self: any, h: any): boolean
-		if self._kind == "write" then
+		if self._kind ~= "read" then
 			uintArg(h.value, bits, name, "value")
 		end
 		local ok, v = fixedWidth(self, bits, function()
@@ -367,7 +382,7 @@ Shared.serializeUint32 = uintMethod(32, "serializeUint32")
 local function wideFixed(C: any, bits: number, name: string)
 	return function(self: any, h: any): boolean
 		local limbs: { number }
-		if self._kind == "write" then
+		if self._kind ~= "read" then
 			limbs = wideArg(C, h.value, name, "value")
 		end
 		if self._error ~= nil then
@@ -860,19 +875,23 @@ local F_MAX_VALUES = 0x4F7FFFFF -- 4294967040, the largest float32 below 2^32
 -- (maxIntegerValue, bits, delta float32 bits), or nil for a declaration that
 -- is not min < max and res > 0 (the caller decides: raise, or refuse on a
 -- read). min, max and res are float32 bit patterns.
-local function compressedFloatParams(min: number, max: number, res: number): (number?, number, number)
+local function compressedFloatParams(min: number, max: number, res: number): (number?, number, number, boolean)
 	if not Float.lt(min, max) or not Float.lt(0, res) then
-		return nil, 0, 0
+		return nil, 0, 0, false
 	end
 	local delta = Float.fsub(max, min)
 	local values = Float.fdiv(delta, res)
+	-- the fourth result: delta and delta / res are finite in float32. A
+	-- declaration where either is not is write misuse (the check model; U9),
+	-- never clamped there; a read clamps it, as every reader does
+	local finite = Float.isFinite(delta) and Float.isFinite(values)
 	if not Float.le(F_ONE, values) then
 		values = F_ONE
 	elseif Float.lt(F_MAX_VALUES, values) then
 		values = F_MAX_VALUES
 	end
 	local maxIntegerValue = Float.ceilToInt(values)
-	return maxIntegerValue, bitsRequired32(0, maxIntegerValue), delta
+	return maxIntegerValue, bitsRequired32(0, maxIntegerValue), delta, finite
 end
 
 -- precomputedOk: what the precomputed constants can be checked for without
@@ -888,21 +907,18 @@ end
 -- compressed runs the shared arm. valueBits is the value to write as float32
 -- bits (write only); the read returns the decoded float32 bits.
 local function compressed(s: any, valueBits: number?, maxIntegerValue: number, bits: number, delta: number, min: number): (boolean, number?)
+	-- a declaration whose top integer decodes to a value that is not finite
+	-- (min + delta, rounded once) is non-conforming as a whole (STANDARD.md
+	-- compressed_float, The decode must be finite): write misuse, trapped on
+	-- write and measure (U9, U6); a reader refuses the non-finite decode itself
+	if s._kind ~= "read" and not Float.isFinite(Float.fadd(min, delta)) then
+		error(RAISE_COMPRESSED_DECODE, 3)
+	end
 	if s._kind == "measure" then
-		if s._error ~= nil then
-			return false, nil
-		end
 		s._bits += bits
 		return true, nil
 	end
 	if s._kind == "write" then
-		-- a declaration whose top integer decodes to a value that is not finite
-		-- (min + delta, rounded once) is non-conforming as a whole (STANDARD.md
-		-- compressed_float, The decode must be finite): misuse, on the write path
-		-- only, as serialize.go; a reader refuses the non-finite decode itself
-		if not Float.isFinite(Float.fadd(min, delta)) then
-			error(RAISE_COMPRESSED_DECODE, 3)
-		end
 		local v = valueBits :: number
 		local normalized = Float.fdiv(Float.fsub(v, min), delta)
 		if not Float.le(0, normalized) then
@@ -948,7 +964,7 @@ end
 -- finite (IMPLEMENTING.md, The check model: a compressed_float value that is
 -- not finite is misuse); a number always is.
 local function compressedValue(s: any, h: any, asBits: boolean, name: string): number?
-	if s._kind ~= "write" then
+	if s._kind == "read" then
 		return nil
 	end
 	if asBits then
@@ -990,10 +1006,13 @@ local function compressedMethod(asBits: boolean, precomputed: boolean, name: str
 				return false
 			end
 			min = mnb :: number
-			local m: number?
-			m, bits, delta = compressedFloatParams(min, mxb :: number, rb :: number)
+			local m: number?, finite: boolean
+			m, bits, delta, finite = compressedFloatParams(min, mxb :: number, rb :: number)
 			if m == nil then
 				return misuse(self, RAISE_FLOAT_PARAMS, 2)
+			end
+			if not finite and self._kind ~= "read" then
+				error(RAISE_DECLARATION_FINITE, 2)
 			end
 			maxIntegerValue = m
 		end
@@ -1259,6 +1278,9 @@ function Shared.serializeObject(self: any, object: any): boolean
 		return false
 	end
 	local ok, err = (method :: any)(object, self)
+	if not ok and self._kind ~= "read" then
+		return false -- a write or measure records nothing (U9, U6)
+	end
 	if not ok then
 		return self:_fail(if err ~= nil then err else REJECTED)
 	end
@@ -1426,9 +1448,12 @@ end
 -- the public compressedFloatParams: Float32 or number parameters, the
 -- constants as (maxIntegerValue, bits, delta as a Float32)
 local function publicCompressedFloatParams(min: any, max: any, res: any): (number, number, any)
-	local m, b, d = compressedFloatParams(Float.float32Bits(min, "compressedFloatParams min"), Float.float32Bits(max, "compressedFloatParams max"), Float.float32Bits(res, "compressedFloatParams res"))
+	local m, b, d, finite = compressedFloatParams(Float.float32Bits(min, "compressedFloatParams min"), Float.float32Bits(max, "compressedFloatParams max"), Float.float32Bits(res, "compressedFloatParams res"))
 	if m == nil then
 		error(RAISE_FLOAT_PARAMS, 2)
+	end
+	if not finite then
+		error(RAISE_DECLARATION_FINITE, 2)
 	end
 	return m, b, Float.Float32.fromBits(d)
 end

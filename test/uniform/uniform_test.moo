@@ -30,6 +30,13 @@ local function bytes(list: { number }): buffer
 	return b
 end
 
+-- traps: fn raises naming text, and the stream records nothing
+local function traps(s: any, fn: () -> (), text: string, what: string)
+	local ok, err = pcall(fn)
+	check(not ok and string.find(tostring(err), text, 1, true) ~= nil, what .. ": expected a trap naming " .. text .. ", got " .. tostring(err))
+	check(s:ok() and s:refusal() == "none", what .. ": the misuse latched " .. tostring(s:error()))
+end
+
 -- refusedBeforeBits: on a fresh read stream over readable bytes, read must
 -- return false (never raise), latch value_out_of_range, move no bits and
 -- leave the holder it was given untouched (U7, U16); on a stream that already
@@ -181,17 +188,17 @@ function T.TestU10WholeOperationRoom()
 	-- would fit, the payload would not; nothing at all is written
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 5 }, 3), "three bits")
-	check(not w:serializeBytes(buffer.create(8)) and w:error() == E.PastEnd, "the bytes do not fit")
+	traps(w, function() w:serializeBytes(buffer.create(8)) end, "room", "the bytes do not fit")
 	check(w:bitsProcessed() == 3, "no align bits were written ahead of the refused payload, at " .. w:bitsProcessed())
 	-- string: the length and the align fit, the payload does not
 	w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 0 }, 32), "32 bits")
-	check(not w:serializeString({ value = "abcdef" }, 64) and w:error() == E.PastEnd, "the string does not fit")
+	traps(w, function() w:serializeString({ value = "abcdef" }, 64) end, "room", "the string does not fit")
 	check(w:bitsProcessed() == 32, "no length or align bits were written ahead of the refused payload, at " .. w:bitsProcessed())
 	-- int_relative: the absolute tier is 38 bits; 33 bits of room take none
 	w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 0 }, 31), "31 bits")
-	check(not w:serializeIntRelative(0, { value = 100000 }) and w:error() == E.PastEnd, "the absolute tier does not fit")
+	traps(w, function() w:serializeIntRelative(0, { value = 100000 }) end, "room", "the absolute tier does not fit")
 	check(w:bitsProcessed() == 31, "no tier flags were written ahead of the refused field, at " .. w:bitsProcessed())
 	-- and what fits exactly is written
 	w = serialize.WriteStream.new(buffer.create(8))
@@ -214,11 +221,10 @@ end
 function T.TestU12EndOnWriteAndMeasureIsANoOp()
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeEnd() and w:bitsProcessed() == 0, "end on a fresh write")
-	check(not w:serializeInt({ value = 9 }, 0, 4) and w:error() == E.ValueOutOfRange, "latch the write")
-	check(w:serializeEnd() == true and w:bitsProcessed() == 0, "end on a failed write is still a no-op returning true")
+	traps(w, function() w:serializeInt({ value = 9 }, 0, 4) end, "out of range", "write misuse")
+	check(w:serializeEnd() == true and w:bitsProcessed() == 0, "end after write misuse is still a no-op returning true")
 	local m = serialize.MeasureStream.new()
-	check(not m:serializeInt({ value = 9 }, 0, 4), "latch the measure")
-	check(m:serializeEnd() == true and m:bitsProcessed() == 0, "end on a failed measure is a no-op returning true")
+	check(m:serializeEnd() == true and m:bitsProcessed() == 0, "end on a measure is a no-op returning true")
 end
 
 -- U13. Re-initialization: reset clears the latch on every stream.
@@ -228,9 +234,9 @@ function T.TestU13ResetClearsTheLatch()
 	r:reset(bytes({ 0x01 }))
 	check(r:ok() and r:refusal() == "none" and r:serializeBool({ value = false }), "reset clears it")
 	local w = serialize.WriteStream.new(buffer.create(8))
-	check(not w:serializeInt({ value = 9 }, 0, 4), "latched")
+	check(w:serializeBits({ value = 1 }, 8), "eight bits")
 	w:reset(buffer.create(8))
-	check(w:ok(), "reset clears a write's latch")
+	check(w:ok() and w:bitsProcessed() == 0, "reset re-initializes a write")
 end
 
 -- U14. The refusal-name function, with the family spellings and "none", and a
@@ -337,6 +343,100 @@ function T.TestU16DeclarationsValidatedOnRead()
 	-- and 4294967040 itself, with its own bit count, is a declaration
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeCompressedFloatPrecomputedBits({ value = 0 }, 4294967040, 32, Float32.parse("1"), 0), "4294967040 is accepted")
+end
+
+
+-- ---------------------------------------------------------------------------
+-- Standard 2.1.1 (IMPLEMENTING.md v2.1.1, the rulings of 2026-10-27).
+
+
+-- U9. Write misuse traps and never latches, on write and on measure: a value
+-- out of range, a non-finite float pattern, a string past its buffer, a write
+-- past the room left. Nothing is recorded, and a later operation succeeds.
+function T.TestU9WriteMisuseTrapsNeverLatches()
+	local function streams(): { any }
+		return { serialize.WriteStream.new(buffer.create(8)), serialize.MeasureStream.new() }
+	end
+	for _, s in streams() do
+		local kind = if s:isReading() then "read" elseif s.flush ~= nil then "write" else "measure"
+		traps(s, function() s:serializeInt({ value = 101 }, -100, 100) end, "out of range", kind .. " int out of range")
+		traps(s, function() s:serializeInt64({ value = 9 }, 0, 4) end, "out of range", kind .. " int64 out of range")
+		traps(s, function() s:serializeFixed64({ value = Int64.fromNumber(65536 * 101) }, 16, 16, -100, 100) end, "out of range", kind .. " fixed out of range")
+		traps(s, function() s:serializeIntRelative(10, { value = 10 }) end, "out of range", kind .. " int_relative not increasing")
+		traps(s, function() s:serializeFloatBits({ value = 0x7FC00000 }) end, "finite", kind .. " float NaN")
+		traps(s, function() s:serializeDoubleBits({ value = Uint64.parse("0x7FF0000000000000") }) end, "finite", kind .. " double infinity")
+		traps(s, function() s:serializeString({ value = "four" }, 4) end, "out of range", kind .. " string past its buffer")
+		check(s:serializeBits({ value = 1 }, 1), kind .. ": a later operation succeeds")
+	end
+	-- past the room left in the buffer traps on a write, writing nothing
+	local w = serialize.WriteStream.new(buffer.create(8))
+	check(w:serializeBits({ value = 0 }, 32), "32 bits")
+	traps(w, function() w:serializeInt64({ value = 0 }, Int64.parse("-9223372036854775808"), Int64.parse("9223372036854775807")) end, "room", "a write past the room")
+	check(w:bitsProcessed() == 32, "the refused write wrote nothing")
+	check(w:serializeBits({ value = 0 }, 32) and w:bitsProcessed() == 64, "the room left is still writable")
+end
+
+-- U6. A measure latches nothing: a failing nested object returns false and
+-- records nothing, on a measure and on a write (U9).
+function T.TestU6FailingObjectRecordsNothingOnWriteAndMeasure()
+	for _, s in { serialize.WriteStream.new(buffer.create(8)), serialize.MeasureStream.new() } do
+		check(s:serializeObject({ serialize = function(_self: any, _s: any): boolean
+			return false
+		end }) == false, "a failing object returns false")
+		check(s:ok() and s:refusal() == "none", "a failing object recorded " .. tostring(s:error()))
+		check(s:serializeObject({ serialize = function(_self: any, _s: any): (boolean, string)
+			return false, "mine"
+		end }) == false and s:ok(), "an object's own error value is not recorded either")
+		check(s:serializeBits({ value = 1 }, 1), "a later operation succeeds")
+	end
+end
+
+-- U6. A measure makes every check a write makes, except room: an over-wide
+-- bits value and a non-finite compressed_float value trap there too.
+function T.TestU6MeasureChecksWhatAWriteChecks()
+	local m = serialize.MeasureStream.new()
+	traps(m, function() m:serializeBits({ value = 0x1F }, 4) end, "uint4", "measure over-wide bits")
+	traps(m, function() m:serializeBits64({ value = Uint64.parse("0x20000000000") }, 41) end, "uint41", "measure over-wide bits64")
+	traps(m, function() m:serializeUint8({ value = 256 }) end, "uint8", "measure over-wide uint8")
+	traps(m, function() m:serializeCompressedFloatBits({ value = 0x7FC00000 }, -10, 10, Float32.parse("0.01")) end, "finite", "measure compressed_float NaN")
+	traps(m, function() m:serializeCompressedFloatBits({ value = 0xFF800000 }, -10, 10, Float32.parse("0.01")) end, "finite", "measure compressed_float -inf")
+end
+
+-- The check model: a compressed_float declaration whose delta or delta / res
+-- is not finite in float32 traps on write and measure, never clamped (it was
+-- silently clamped to 4294967040 values); compressedFloatParams traps on it,
+-- as the reference's compressed_float_params asserts. A read is unchanged.
+function T.TestCompressedDeclarationNotFiniteTraps()
+	local mn, mx, res = 0, Float32.parse("1e38"), Float32.parse("1e-38")
+	local w = serialize.WriteStream.new(buffer.create(8))
+	traps(w, function() w:serializeCompressedFloat({ value = 0 }, mn, mx, res) end, "finite", "write (0, 1e38, 1e-38)")
+	check(w:bitsProcessed() == 0, "the write wrote nothing")
+	local m = serialize.MeasureStream.new()
+	traps(m, function() m:serializeCompressedFloat({ value = 0 }, mn, mx, res) end, "finite", "measure (0, 1e38, 1e-38)")
+	traps(m, function() m:serializeCompressedFloatBits({ value = 0 }, Float32.parse("-3e38"), Float32.parse("3e38"), 1) end, "finite", "measure a delta past FLT_MAX")
+	local ok = pcall(serialize.compressedFloatParams, mn, mx, res)
+	check(not ok, "compressedFloatParams (0, 1e38, 1e-38) did not trap")
+	-- a read still clamps the declaration and reads
+	local r = serialize.ReadStream.new(buffer.create(8))
+	local h = { value = 99 }
+	check(r:serializeCompressedFloat(h, mn, mx, res) and h.value == 0, "a read of (0, 1e38, 1e-38) is unchanged")
+end
+
+-- U15. copyString is defined on bytes: every vector of the reference's
+-- test_copy_string, the two ill-formed ones included.
+function T.TestU15CopyStringReferenceVectors()
+	local cases = {
+		{ "abc", 8, "abc" }, { "a\0bc", 8, "a" }, { "abcdefghij", 4, "abc" },
+		{ "\xC3\xA9\xC3\xA9", 4, "\xC3\xA9" }, { "\xC3\xA9\xC3\xA9", 3, "\xC3\xA9" },
+		{ "a\xF0\x9F\x98\x80", 3, "a" }, { "a\xF0\x9F\x98\x80", 4, "a" }, { "a\xF0\x9F\x98\x80", 5, "a" },
+		{ "a\xF0\x9F\x98\x80", 6, "a\xF0\x9F\x98\x80" },
+		{ "ab\x80\x80", 4, "a" }, { "\xC3\xA9\xA9\xA9", 4, "" },
+		{ "abc", 1, "" }, { "x\xE2\x82\xAC", 4, "x" },
+	}
+	for _, c in cases do
+		local got = serialize.copyString(c[1], c[2])
+		check(got == c[3], string.format("copyString(%q, %d) is %q, want %q", c[1], c[2], got, c[3]))
+	end
 end
 
 return T

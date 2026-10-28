@@ -68,7 +68,7 @@ What holds the port to the reference.
 
 | feature | serialize.moo |
 |---|:---:|
-| All 413 conformance vectors of serialize v2.1.0, discovered, never listed, every refusal for its stated reason | ✅ |
+| All 413 conformance vectors of serialize v2.1.1, discovered, never listed, every refusal for its stated reason | ✅ |
 | Every negative control: an unknown operation, and 15 sabotaged readers each failing exactly its .expected list | ✅ |
 | C oracles for the boundary and the float32 arithmetic | ✅ |
 | Loading is closed: literal ./ requires, planted shadow never loaded | ✅ |
