@@ -225,9 +225,13 @@ the declaration it would make has 1001 steps, not 1000: a different wire.
 
 All of it is checked against `oracle/softfloat_oracle.c`: 6,000 cases of each
 operation, 2,015 conversions, 2,000 floors and ceilings, 2,031 decimals, and
-300 compressed float declarations with 7,200 writes and 7,200 reads, each one
-the C compiler's float32 arithmetic (`-ffp-contract=off`, `FLT_EVAL_METHOD`
-0).
+300 compressed float declarations with 7,200 writes and 7,200 reads, and the
+far-exponent sweep (the audit of 2026-10-27: 13,444 adds and as many subs with
+b 23 to 50 binades below a), each one the C compiler's float32 arithmetic
+(`-ffp-contract=off`, `FLT_EVAL_METHOD` 0). Every intermediate stays an exact
+moo number: moo's Q48.16 saturates past 2^47 - 1, so the far-exponent add
+aligns a in units of 2^(ea - 22), keeping A + B below 2^47 with b's dropped
+bits in a sticky last bit (`test/softfloat` TestFaddFarExponentStaysExact).
 
 A non-finite value on a compressed float write (only the Bits form can carry
 one) raises `serialize: compressed float value must be finite`, for
@@ -329,15 +333,19 @@ control loads it through `../` and sees it raise).
   `fuzz/go.mod`) generates random programs over every operation (bits,
   bits64, bool, uint8 to uint128, int, int64, int128, fixed on both storage
   widths, `serializeFixedNumber`, int_relative, float, double,
-  compressed_float plain and precomputed, bytes, string, align, object), each
+  compressed_float plain and precomputed, the number forms of float, double
+  and compressed_float plain and precomputed, bytes, string, align, object), each
   ending with `serializeEnd`, and `fuzz/driver.moo` runs them on the pinned
   moo. The writers must emit identical bytes and the measures the same bits;
   moo reads serialize.go's bytes and serialize.go reads moo's, both back to
   the program's values; and on a mutated copy (bits flipped, bytes
   overwritten, truncated, extended) the readers must agree on the step they
   stop at, `bitsProcessed()` there, the refusal reason and every value before
-  it. Floats travel as their bit patterns (the Bits forms): the number forms
-  refuse values past 2^47 that serialize.go accepts, by design. It is a
+  it. Floats travel as their bit patterns (the Bits forms) and as moo numbers
+  (the number forms, the audit of 2026-10-27): the Go side emulates the float
+  boundary exactly ("The float boundary" above), writing the IEEE value
+  nearest the number and reading a value as the number nearest it, refused as
+  `value_out_of_range` where the boundary has none, as moo refuses it. It is a
   functional test (it spawns moo), never part of `make test`. Its reversed
   witness is `make fuzz-control`: `-widen-int` makes the Go writer use int
   ranges one bit wider, and the run must fail on the writers' bytes. CI runs

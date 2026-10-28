@@ -112,4 +112,36 @@ function T.TestSoftfloatWitnesses()
 	check(F.parseFloat32("x") == nil, "a non-number is refused")
 end
 
+-- The far-exponent add (the audit of 2026-10-27): b 23 or more binades below
+-- a. The old alignment put a in units of 2^(ea - 23), ma * 2^23 up to 2^47 -
+-- 2^23, and the sum with b's aligned significand could pass 2^47 - 1, the
+-- largest moo integer, where moo's Q48.16 saturates: the first pair below
+-- reached 2^47 + 2^23 - 1 and was right only because the rounding absorbed the
+-- saturation; the other three are the audit's neighbours. alignAdd keeps both A + B and A - B exact (below 2^47); the
+-- oracle (far_exponent in oracle/softfloat_oracle.c) sweeps every gap from 23
+-- to 50 against the C compiler.
+function T.TestFaddFarExponentStaysExact()
+	local pairs = { { 0x4B7FFFFF, 0x3FFFFFFF, 0x4B800000 }, { 0x7F7FFFFF, 0x737FFFFF, 0x7F800000 }, { 0x3F7FFFFF, 0x337FFFFF, 0x3F800000 }, { 0xBF7FFFFF, 0xB37FFFFF, 0xBF800000 } }
+	local LIMIT = 140737488355327 -- 2^47 - 1
+	local saturated = 0
+	for _, p in pairs do
+		local _, ma, ea = F._unpack(p[1])
+		local _, mb, eb = F._unpack(p[2])
+		local A, B = F._alignAdd(ma, ea, mb, eb)
+		check(A == math.floor(A) and B == math.floor(B), string.format("%08X + %08X: the aligned operands are integers", p[1], p[2]))
+		check(A + B <= LIMIT, string.format("%08X + %08X: the aligned sum %s passes 2^47 - 1", p[1], p[2], tostring(A + B)))
+		check((A + B) - A == B and A - (A - B) == B, string.format("%08X + %08X: the aligned sum and difference are exact", p[1], p[2]))
+		check(F.fadd(p[1], p[2]) == p[3], string.format("%08X + %08X = %08X", p[1], p[2], p[3]))
+		-- the reversed witness: the 2.0 alignment's sum, which moo saturates
+		-- past every moo integer (so a test of the sum is not blind)
+		local drop = (ea - eb) - 22
+		local oldA = ma * 2 ^ 23
+		local oldB = (mb // 2 ^ drop) * 2 + (if (mb // 2 ^ drop) * 2 ^ drop ~= mb then 1 else 0)
+		if (oldA + oldB) - oldA ~= oldB then
+			saturated += 1
+		end
+	end
+	check(saturated >= 1, "the 2.0 alignment no longer saturates on any pair; the witness is blind")
+end
+
 return T

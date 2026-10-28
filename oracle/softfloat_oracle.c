@@ -85,6 +85,48 @@ static void binary_ops(int count)
     }
 }
 
+/* the far-exponent sweep (the audit of 2026-10-27): b 23 or more binades below
+   a, where the emulated add aligns b with a sticky bit. The four pairs the audit
+   found first (a's significand all ones and b's sum with it past 2^47 in the
+   emulation's units), then every exponent gap from 23 to 50 over a's and b's
+   extreme and random significands, both signs, at the top, the middle and the
+   bottom of the exponent range, b down into the subnormals. */
+static void far_exponent(void)
+{
+    static const uint32_t pairs[][2] = {
+        { 0x4B7FFFFFu, 0x3FFFFFFFu }, { 0x7F7FFFFFu, 0x737FFFFFu },
+        { 0x3F7FFFFFu, 0x337FFFFFu }, { 0xBF7FFFFFu, 0xB37FFFFFu },
+    };
+    for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+        volatile float r = f32_from(pairs[i][0]) + f32_from(pairs[i][1]);
+        printf("add %08" PRIX32 " %08" PRIX32 " %08" PRIX32 "\n", pairs[i][0], pairs[i][1], canon(r));
+        r = f32_from(pairs[i][0]) - f32_from(pairs[i][1]);
+        printf("sub %08" PRIX32 " %08" PRIX32 " %08" PRIX32 "\n", pairs[i][0], pairs[i][1], canon(r));
+    }
+    static const int bases[] = { 254, 200, 150, 127, 60, 47 };
+    for (size_t k = 0; k < sizeof bases / sizeof bases[0]; k++) {
+        for (int gap = 23; gap <= 50; gap++) {
+            int eb = bases[k] - gap;
+            if (eb < 0)
+                eb = 0;
+            uint32_t sigs_a[] = { 0x7FFFFFu, 0x000000u, 0x400001u, (uint32_t) oracle_next() & 0x7FFFFFu };
+            uint32_t sigs_b[] = { 0x7FFFFFu, 0x000000u, 0x000001u, 0x400000u, (uint32_t) oracle_next() & 0x7FFFFFu };
+            for (size_t i = 0; i < sizeof sigs_a / sizeof sigs_a[0]; i++) {
+                for (size_t j = 0; j < sizeof sigs_b / sizeof sigs_b[0]; j++) {
+                    for (uint32_t sign = 0; sign < 4; sign++) {
+                        uint32_t a = ((sign & 1u) << 31) | ((uint32_t) bases[k] << 23) | sigs_a[i];
+                        uint32_t b = ((sign >> 1) << 31) | ((uint32_t) eb << 23) | sigs_b[j];
+                        volatile float r = f32_from(a) + f32_from(b);
+                        printf("add %08" PRIX32 " %08" PRIX32 " %08" PRIX32 "\n", a, b, canon(r));
+                        r = f32_from(a) - f32_from(b);
+                        printf("sub %08" PRIX32 " %08" PRIX32 " %08" PRIX32 "\n", a, b, canon(r));
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void conversions(int count)
 {
     static const uint64_t edges[] = { 0, 1, 2, 16777215, 16777216, 16777217, 16777218, 16777219,
@@ -210,5 +252,6 @@ int main(void)
     conversions(2000);
     decimals(2000);
     compressed(300);
+    far_exponent();
     return 0;
 }

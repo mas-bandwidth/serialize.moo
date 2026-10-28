@@ -185,6 +185,22 @@ local function step(s: any, st: Step): (boolean, string)
 		local h = { value = if writing then w[1] else 0 }
 		local ok = s:serializeCompressedFloatPrecomputedBits(h, maxIntegerValue, bits, delta, f32(w[2]))
 		return ok, x32(h.value)
+	elseif op == "fN" or op == "dN" or op == "cfN" or op == "cfpN" then
+		-- the number forms: a moo number across the float boundary; the read
+		-- token is the number's own Q48.16 bits
+		local h: any = { value = if writing then Int64.toNumberRaw(s64(w, 1)) else nil }
+		local ok: boolean
+		if op == "fN" then
+			ok = s:serializeFloat(h)
+		elseif op == "dN" then
+			ok = s:serializeDouble(h)
+		elseif op == "cfN" then
+			ok = s:serializeCompressedFloat(h, f32(w[3]), f32(w[4]), f32(w[5]))
+		else
+			local maxIntegerValue, bits, delta = S.compressedFloatParams(f32(w[3]), f32(w[4]), f32(w[5]))
+			ok = s:serializeCompressedFloatPrecomputed(h, maxIntegerValue, bits, delta, f32(w[3]))
+		end
+		return ok, if ok and not writing then wide(Int64.fromNumberRaw(h.value), 2) else ""
 	elseif op == "by" then
 		local data = if writing then bufOf(st.hex) else buffer.create(#st.hex // 2)
 		local ok = s:serializeBytes(data)
