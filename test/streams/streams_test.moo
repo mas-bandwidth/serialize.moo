@@ -387,7 +387,7 @@ function T.TestObjectLatchesTheCallersError()
 	local w2 = serialize.WriteStream.new(buffer.create(8))
 	check(not w2:serializeObject({ serialize = function()
 		return false
-	end }) and w2:error() == "object", "no error value latches \"object\"")
+	end }) and w2:error() == E.Rejected, "no error value latches rejected (U2)")
 end
 
 -- the measure is a bound: 7 bits per align, whatever the position

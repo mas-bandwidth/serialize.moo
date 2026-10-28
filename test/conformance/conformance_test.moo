@@ -672,6 +672,13 @@ local function step(s: any, st: { string }): (boolean, any)
 		ok = s:serializeString(h, tonumber(st[2]) :: number)
 	elseif op == "end" then
 		return s:serializeEnd(), nil
+	elseif op == "reject" then
+		-- the caller's own refusal at the top level, through the reject entry
+		-- point (sequence.txt, reject; STANDARD.md, Refusal reasons). It is
+		-- read only, and only refused vectors carry it.
+		check(#st == 1, "the reject step takes no parameters")
+		check(s:isReading(), "a reject step reached a write or measure stream")
+		return s:reject(), nil
 	elseif op == "uint128" then
 		h = hold(Uint128.fromNumber(0))
 		ok = s:serializeUint128(h)
@@ -789,10 +796,20 @@ local function runSteps(s: any, steps: { { string } }, outcomes: { any }?, poiso
 				check(steps[i + j] ~= nil, "object step outruns the step list")
 				table.insert(inner, steps[i + j])
 			end
+			-- A reject step inside is the callback returning false there
+			-- without refusing on its own (object.txt): serializeObject must
+			-- latch it as rejected.
 			local object = {
 				serialize = function(_self: any, _stream: any): boolean
 					local all = true
 					for _, sub in inner do
+						if sub[1] == "reject" then
+							check(#sub == 1, "the reject step takes no parameters")
+							if outcomes ~= nil then
+								table.insert(outcomes, { op = "reject", value = nil, st = sub })
+							end
+							return false
+						end
 						if not one(sub) then
 							all = false
 						end
@@ -852,14 +869,42 @@ RUN.sequence = function(rec: any, r: any)
 	end
 end
 
+-- checkCallbackRefusal is the object check every refused object.txt vector
+-- also drives (the reference runner's run_callback_refuses_object): over the
+-- vector's bytes, a nested object whose serialize returns false on its own,
+-- touching nothing, must latch rejected (STANDARD.md, Refusal reasons;
+-- IMPLEMENTING.md U2), and the stream must then be terminal with the reason
+-- kept: a later object refuses without running, a read consumes nothing.
+local function checkCallbackRefusal(rec: any)
+	local r = serialize.ReadStream.new(toBuffer(rec.bytes))
+	local refuses = { serialize = function(_self: any, _s: any): boolean
+		return false
+	end }
+	check(not r:serializeObject(refuses), rec.name .. ": serializeObject accepted a callback returning false")
+	check(r:error() == Refusal.Rejected, rec.name .. ": a callback-only object refusal latched " .. tostring(r:error()) .. ", not rejected")
+	local called = false
+	local after = { serialize = function(_self: any, _s: any): boolean
+		called = true
+		return true
+	end }
+	check(not r:serializeObject(after) and not called, rec.name .. ": a nested object ran or was accepted after a callback-only refusal")
+	checkTerminal(r, rec.name .. " (callback refusal)")
+	check(r:error() == Refusal.Rejected, rec.name .. ": reads after a callback-only refusal overwrote rejected")
+end
+
 local function runRecord(rec: any)
 	local runner = RUN[rec.op]
 	if runner == nil then
 		fail("no runner for operation " .. rec.op .. " in " .. rec.name)
 	end
-	local ok, err = xpcall(runner, function(e: any): any
+	local ok, err = xpcall(function()
+		runner(rec, serialize.ReadStream.new(toBuffer(rec.bytes)))
+		if rec.file == "object" and rec.expect.refused then
+			checkCallbackRefusal(rec)
+		end
+	end, function(e: any): any
 		return tostring(e) .. "\n" .. debug.traceback()
-	end, rec, serialize.ReadStream.new(toBuffer(rec.bytes)))
+	end)
 	if not ok then
 		error(rec.name .. ": " .. tostring(err), 0)
 	end
@@ -911,7 +956,7 @@ local function corpus(): { any }
 	return recordsOf(inputs, corpusNames())
 end
 
-local CORPUS_SIZE = 397 -- serialize v2.0.0
+local CORPUS_SIZE = 413 -- serialize v2.1.0
 
 if inputs.CONTROL ~= nil then
 	-- control mode: the vectors that fail are exactly the .expected list
@@ -970,7 +1015,7 @@ function T.TestConformanceCorpus()
 	print("  conformance: " .. #records .. " vectors in " .. #names .. " files, all passed, every refusal for its stated reason")
 	print("  number form: " .. stats.numberForm .. " float, double and compressed_float vectors re-run across the boundary, " .. stats.numberRefused .. " finite ones refused by it (no moo number)")
 	print("  fixed number: " .. stats.fixedNumber .. " Q48.16 vectors re-run as moo numbers")
-	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.0.0 has " .. CORPUS_SIZE)
+	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.1.0 has " .. CORPUS_SIZE)
 end
 
 -- The first control (STANDARD.md): conformance-controls/unknown-operation.txt

@@ -13,11 +13,12 @@ of a script port: the holders, the streams, the runner. All are read, never
 imported.
 
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
-and `conformance-controls/` (the unknown-operation control and the 16
+and `conformance-controls/` (the unknown-operation control and the 18
 `*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.0.1 (`b812b75cc0a75dd925af74103ab1f155b9431ac1`; object read terminality,
-the standard unchanged from v2.0.0). CI diffs them against the tag; a change
-arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
+v2.1.0 (`884bc3098c9619d67308d9c6b5cdf38593d98b69`; format 2.0, standard 2.1:
+the `rejected` refusal reason, its `reject` vectors and controls, and the
+uniform rules U1 to U16 in IMPLEMENTING.md). CI diffs them against the tag; a
+change arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
 
 **Format 2.0.** The wire carries only integers and bytes, and every value has
 exactly one encoding (STANDARD.md, Format version). Against 1.1: `float` and
@@ -26,13 +27,11 @@ finite is refused; `int_relative`'s absolute tier is canonical; `end` is new;
 `wstring` is gone; and every refusal names its reason. Every finite value 1.1
 could carry keeps its exact bytes.
 
-**The moo pin.** moo main at `f04c4cce3ab608caf39e36d7941fcb5bb09157dd`
-(2026-10-21, PR #33 merged): layer 3 (number = Q48.16), layer 4 (the math
-library) and layer 5 (conformance) are on it. The layer 3b stack (vec3, quat,
-transform, the saturating fixed point; PRs #34 to #40, merged to moo main by
-2026-10-22 at `35b4a40`) is not, and nothing here needs it, so the format 2.0
-port keeps this pin. `make dist-moo`
-builds `moo` and `moo-analyze` from that commit and refuses any other.
+**The moo pin.** moo release v1.2.1
+(`7c0ff3e83d8e7f4a71f4b06c9530862197271d41`, the commit the tag names): the
+number is Q48.16 and saturates (layer 3b), with the math library and moo's
+conformance on it. `make dist-moo` builds `moo` and `moo-analyze` from that
+commit and refuses any other.
 
 ## The API
 
@@ -45,7 +44,7 @@ on a refusal.
 | entry | what |
 |---|---|
 | `FORMAT_VERSION` | `"2.0"` |
-| `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`; `stream:error()` returns one |
+| `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`, and `Rejected` (`"rejected"`, standard 2.1: the caller's own refusal); `stream:error()` returns one |
 | `WriteStream.new(buffer)`, `ReadStream.new(buffer)`, `MeasureStream.new()` | the streams |
 | `Continue(stream, holder)`, `Until(stream, holder)` | sentinel loops that end on hostile data |
 | `BitWriter`, `BitReader` | the bitpacker |
@@ -79,6 +78,7 @@ on a refusal.
 | `serializeAlign()` | | align |
 | `serializeEnd()` | | end |
 | `serializeObject(object)` | a table with `serialize(self, stream)` | object |
+| `reject()` | | the caller's refusal (read only; raises on a write or measure) |
 
 Every stream also has `reset`, `isWriting`, `isReading`, `error`, `ok`,
 `alignBits`, `bitsProcessed`, `bytesProcessed`, `setContext`, `context`; a
@@ -107,10 +107,18 @@ nothing (STANDARD.md, Refusal reasons). A packet reader calls `serializeEnd()`
 after the last field of the top-level object: it refuses a whole byte left
 over as `trailing_data`, then a set bit in the final byte's padding as
 `nonzero_padding`, and leaves `bitsProcessed()` at 8 times the byte count. A
-write's or a measure's end emits nothing. `serializeObject` latches the
-object's own error value when its `serialize` returns `false` and one (the
-string `"object"` when none is given): that is the caller's error, not a
-refusal of the format.
+write's or a measure's end emits nothing.
+
+**The caller's refusal** (STANDARD.md 2.1, Refusal reasons, `rejected`;
+IMPLEMENTING.md U2). `stream:reject()` on a read latches `rejected` through the
+one latch and returns `false`, so a serialize method can `return
+stream:reject()`; it is terminal, and a reason latched first is kept. On a
+write or a measure there is nothing to refuse: `reject` raises there, as every
+other misuse does. `serializeObject` latches `rejected` when the object's
+`serialize` returns `false` with no error value of its own (2.0 latched the
+string `"object"`), and the object's own error value when it gives one,
+through the same latch, so a reason a primitive inside the object latched
+first is kept.
 
 ## The number model
 
