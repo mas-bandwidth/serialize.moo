@@ -87,10 +87,12 @@ S.compressedFloatParams = Stream.compressedFloatParams
 S.refusalName = Stream.refusalName
 
 -- copyString(source, destSize): the reference's serialize_copy_string
--- (IMPLEMENTING.md U15): source cut at its first zero byte and to at most
--- destSize - 1 bytes, at a UTF-8 character boundary, so the result always fits
--- a string field of buffer size destSize and stays well formed (U3). destSize
--- is an integer of at least 1.
+-- (IMPLEMENTING.md U15, v2.1.1), defined on the source's bytes: the bytes
+-- before the first zero byte; if more than destSize - 1, the first destSize - 1
+-- of them, then bytes dropped from the end while the first byte left out is a
+-- continuation byte (10xxxxxx). For well-formed UTF-8 that is the longest
+-- prefix that fits a string field of buffer size destSize and does not end
+-- inside a character. destSize below 1 is write misuse, and traps (U9).
 function S.copyString(source: string, destSize: number): string
 	if type(source) ~= "string" then
 		error("serialize: copyString source must be a string", 2)

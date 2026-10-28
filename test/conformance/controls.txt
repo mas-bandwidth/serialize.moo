@@ -102,8 +102,8 @@ patch \t\tlocal v = Wide.add(offset, lo, n) -- NEGATIVE CONTROL: the value goes 
 # Deleting the entry alone is not the rule: the exit would still refuse.
 control object-terminal
 file serialize_stream.moo
-needle \tif self._error ~= nil then\n\t\treturn false\n\tend\n\tlocal ok, err = (method :: any)(object, self)\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else REJECTED)\n\tend\n\treturn self._error == nil
-patch \tlocal ok, err = (method :: any)(object, self) -- NEGATIVE CONTROL: an object on a failed stream answers for its callback only, on purpose\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else REJECTED)\n\tend\n\treturn true
+needle \tif self._error ~= nil then\n\t\treturn false\n\tend\n\tlocal ok, err = (method :: any)(object, self)\n\tif not ok and self._kind ~= "read" then\n\t\treturn false -- a write or measure records nothing (U9, U6)\n\tend\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else REJECTED)\n\tend\n\treturn self._error == nil
+patch \tlocal ok, err = (method :: any)(object, self) -- NEGATIVE CONTROL: an object on a failed stream answers for its callback only, on purpose\n\tif not ok and self._kind ~= "read" then\n\t\treturn false\n\tend\n\tif not ok then\n\t\treturn self:_fail(if err ~= nil then err else REJECTED)\n\tend\n\treturn true
 
 # serializeObject latches the 2.0 value for a callback that fails with no error
 # value of its own: the string "object", a reason outside the closed list, in

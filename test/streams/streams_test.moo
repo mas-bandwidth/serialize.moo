@@ -141,14 +141,15 @@ end
 function T.TestOverflowWritesNothing()
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 0 }, 32), "32 bits fit")
-	check(not w:serializeInt64({ value = 0 }, Int64.parse("-9223372036854775808"), Int64.parse("9223372036854775807")), "64 more bits do not")
-	check(w:error() == E.PastEnd and w:bitsProcessed() == 32, "the refused wide write left no dangling low word")
+	raises(function()
+		w:serializeInt64({ value = 0 }, Int64.parse("-9223372036854775808"), Int64.parse("9223372036854775807"))
+	end, "does not fit the room left")
+	check(w:ok() and w:bitsProcessed() == 32, "the trapped wide write left no dangling low word and latched nothing (U9)")
 end
 
--- misuse raises naming the rule, even on a latched stream
+-- misuse raises naming the rule (a write never latches, U9)
 function T.TestMisuseRaises()
 	local w = serialize.WriteStream.new(buffer.create(0))
-	check(not w:serializeBool({ value = true }), "latch an overflow")
 	raises(function()
 		w:serializeBits({ value = 1 }, 33)
 	end, "bits must be in [1,32]")
@@ -193,19 +194,16 @@ function T.TestMisuseRaises()
 	end, "multiple of 8 bytes")
 end
 
--- refusals on write: a value outside its range latches, writing nothing
+-- write misuse on write: a value outside its range traps, writing nothing and
+-- latching nothing (IMPLEMENTING.md U9)
 function T.TestWriteRefusals()
 	local w = serialize.WriteStream.new(buffer.create(16))
-	check(not w:serializeInt({ value = 101 }, -100, 100), "101 is out of range")
-	check(w:error() == E.ValueOutOfRange and w:bitsProcessed() == 0, "latched, nothing written")
-	w:reset(buffer.create(16))
-	check(not w:serializeString({ value = "four" }, 4), "a 4-byte string needs buffer size 5")
-	check(w:error() == E.ValueOutOfRange, "a string past its buffer is value_out_of_range")
-	w:reset(buffer.create(16))
-	check(not w:serializeIntRelative(10, { value = 10 }), "current must exceed previous")
-	check(w:error() == E.ValueOutOfRange, "not increasing is value_out_of_range")
-	w:reset(buffer.create(16))
-	check(not w:serializeFixed64({ value = Int64.fromNumber(65536 * 101) }, 16, 16, -100, 100), "101.0 is outside [-100,100]")
+	raises(function() w:serializeInt({ value = 101 }, -100, 100) end, "out of range")
+	check(w:ok() and w:bitsProcessed() == 0, "nothing latched, nothing written")
+	raises(function() w:serializeString({ value = "four" }, 4) end, "out of range")
+	raises(function() w:serializeIntRelative(10, { value = 10 }) end, "out of range")
+	raises(function() w:serializeFixed64({ value = Int64.fromNumber(65536 * 101) }, 16, 16, -100, 100) end, "out of range")
+	check(w:ok() and w:bitsProcessed() == 0, "still nothing latched or written")
 end
 
 -- a degenerate range costs zero bits on every width (STANDARD.md fixed,
@@ -383,16 +381,22 @@ function T.TestContinueEndsOnHostileData()
 	check(k == 8, "8 false bits, then the overflow ends it")
 end
 
+-- on a read a false object latches the caller's own error value, or rejected
+-- (U2); on a write it returns false and records nothing (U9)
 function T.TestObjectLatchesTheCallersError()
-	local w = serialize.WriteStream.new(buffer.create(8))
-	check(not w:serializeObject({ serialize = function(_self: any, _s: any)
+	local r = serialize.ReadStream.new(buffer.create(8))
+	check(not r:serializeObject({ serialize = function(_self: any, _s: any)
 		return false, "mine"
 	end }), "a false object fails")
-	check(w:error() == "mine", "the caller's own error is latched")
-	local w2 = serialize.WriteStream.new(buffer.create(8))
-	check(not w2:serializeObject({ serialize = function()
+	check(r:error() == "mine", "the caller's own error is latched")
+	local r2 = serialize.ReadStream.new(buffer.create(8))
+	check(not r2:serializeObject({ serialize = function()
 		return false
-	end }) and w2:error() == E.Rejected, "no error value latches rejected (U2)")
+	end }) and r2:error() == E.Rejected, "no error value latches rejected (U2)")
+	local w = serialize.WriteStream.new(buffer.create(8))
+	check(not w:serializeObject({ serialize = function()
+		return false, "mine"
+	end }) and w:ok(), "a false object on a write records nothing")
 end
 
 -- the measure is a bound: 7 bits per align, whatever the position
@@ -402,7 +406,8 @@ function T.TestMeasureIsABound()
 	m:serializeAlign()
 	m:serializeBits({ value = 0 }, 8)
 	check(m:bitsProcessed() == 23 and m:alignBits() == 7, "8 + 7 + 8")
-	check(not m:serializeInt({ value = 5 }, 0, 4), "a measure still refuses an out-of-range value")
+	raises(function() m:serializeInt({ value = 5 }, 0, 4) end, "out of range")
+	check(m:ok(), "a measure traps an out-of-range value, latching nothing (U6, U9)")
 end
 
 -- the float forms (STANDARD.md, Finite values only): a number crosses the
@@ -441,9 +446,11 @@ function T.TestFloatForms()
 		local num = { value = 1 }
 		check(not rn:serializeFloat(num) and num.value == 1 and rn:error() == E.NonFiniteFloat, string.format("0x%08X has no number: non_finite_float", bits))
 		local wb = serialize.WriteStream.new(buffer.create(8))
-		check(not wb:serializeFloatBits({ value = bits }) and wb:error() == E.NonFiniteFloat and wb:bitsProcessed() == 0, string.format("0x%08X is not written", bits))
+		raises(function() wb:serializeFloatBits({ value = bits }) end, "must be finite")
+		check(wb:ok() and wb:bitsProcessed() == 0, string.format("0x%08X is not written, nothing latched", bits))
 		local mb = serialize.MeasureStream.new()
-		check(not mb:serializeFloatBits({ value = bits }) and mb:error() == E.NonFiniteFloat, string.format("0x%08X is not measured", bits))
+		raises(function() mb:serializeFloatBits({ value = bits }) end, "must be finite")
+		check(mb:ok() and mb:bitsProcessed() == 0, string.format("0x%08X is not measured", bits))
 	end
 	-- a finite value past every moo number is the boundary's refusal
 	local rf = serialize.ReadStream.new(le32(0x7F7FFFFF))
@@ -462,7 +469,8 @@ function T.TestFloatForms()
 		local rn = serialize.ReadStream.new(wd:data())
 		check(not rn:serializeDouble({ value = 1 }) and rn:error() == E.NonFiniteFloat, text .. " has no number: non_finite_float")
 		local wb = serialize.WriteStream.new(buffer.create(16))
-		check(not wb:serializeDoubleBits({ value = u }) and wb:error() == E.NonFiniteFloat and wb:bitsProcessed() == 0, text .. " is not written")
+		raises(function() wb:serializeDoubleBits({ value = u }) end, "must be finite")
+		check(wb:ok() and wb:bitsProcessed() == 0, text .. " is not written, nothing latched")
 	end
 	for _, text in { "0x8000000000000000", "0x0000000000000001", "0x7FEFFFFFFFFFFFFF" } do
 		local u = Uint64.parse(text)
