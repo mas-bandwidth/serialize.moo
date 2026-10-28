@@ -14,7 +14,7 @@
 # make fuzz-control   its negative control: the -widen-int run must go red
 
 MOO_REPO   := https://github.com/mas-bandwidth/moo.git
-MOO_PIN    := f04c4cce3ab608caf39e36d7941fcb5bb09157dd
+MOO_PIN    := 7c0ff3e83d8e7f4a71f4b06c9530862197271d41
 MOO_DIST   := $(CURDIR)/dist/moo
 MOO        ?= $(MOO_DIST)/moo
 MOO_ANALYZE ?= $(MOO_DIST)/moo-analyze

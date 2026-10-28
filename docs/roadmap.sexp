@@ -148,7 +148,7 @@
   (:id "checks" :type :roadmap :title "Checks"
    :text ("What holds the port to the reference.")
    :rows
-   (("corpus" "All 397 conformance vectors of serialize v2.0.1, discovered, never listed, every refusal for its stated reason")
+   (("corpus" "All 413 conformance vectors of serialize v2.1.0, discovered, never listed, every refusal for its stated reason")
     ("controls" "Every negative control: an unknown operation, and 15 sabotaged readers each failing exactly its .expected list")
     ("oracles" "C oracles for the boundary and the float32 arithmetic")
     ("loading" "Loading is closed: literal ./ requires, planted shadow never loaded")
@@ -166,7 +166,7 @@
     ("ci" "moo" "checks/ci")
     ("fuzz" "moo" "checks/fuzz")
     ("nightly" "moo" "checks/nightly")))
-  (:id "checks-corpus" :type :task :title "All 397 conformance vectors of serialize v2.0.1, discovered, never listed, every refusal for its stated reason" :state :done :evidence ("test/conformance TestConformanceCorpus (mas-bandwidth/serialize.moo PR #2)"))
+  (:id "checks-corpus" :type :task :title "All 413 conformance vectors of serialize v2.1.0, discovered, never listed, every refusal for its stated reason" :state :done :evidence ("test/conformance TestConformanceCorpus (mas-bandwidth/serialize.moo PR #2)"))
   (:id "checks/corpus" :type :work-set :children ("checks-corpus"))
   (:id "checks-controls" :type :task :title "Every negative control: an unknown operation, and 15 sabotaged readers each failing exactly its .expected list" :state :done :evidence ("test/conformance TestControlUnknownOperationGoesRed (mas-bandwidth/serialize.moo PR #1)" "test/conformance/controls.txt, run by tools/moorun (mas-bandwidth/serialize.moo PR #2)"))
   (:id "checks/controls" :type :work-set :children ("checks-controls"))

@@ -36,6 +36,9 @@ export type Holder<T> = { value: T }
 -- latches past_end when the buffer is full, value_out_of_range for a value
 -- outside the range it is serialized with, and non_finite_float for a float
 -- or double bit pattern that is NaN or an infinity, as serialize.go's writer.
+-- rejected (standard 2.1) is the one reason the wire never chooses: the
+-- caller's own refusal of a value whose bytes were well formed (reject, or a
+-- nested object whose serialize returns false; IMPLEMENTING.md U2).
 local Refusal = table.freeze({
 	PastEnd = "past_end",
 	ValueOutOfRange = "value_out_of_range",
@@ -45,6 +48,7 @@ local Refusal = table.freeze({
 	InvalidUtf8 = "invalid_utf8",
 	EmbeddedNul = "embedded_nul",
 	NonCanonical = "non_canonical",
+	Rejected = "rejected",
 })
 local PAST_END = Refusal.PastEnd
 local RANGE = Refusal.ValueOutOfRange
@@ -54,6 +58,7 @@ local NON_FINITE = Refusal.NonFiniteFloat
 local INVALID_UTF8 = Refusal.InvalidUtf8
 local EMBEDDED_NUL = Refusal.EmbeddedNul
 local NON_CANONICAL = Refusal.NonCanonical
+local REJECTED = Refusal.Rejected
 
 -- serialize.go's panic texts (serialize.go, the panic constants).
 local RAISE_BITS_RANGE = "serialize: bits must be in [1,32]"
@@ -70,6 +75,7 @@ local RAISE_COMPRESSED_DECODE = "serialize: compressed float declaration decodes
 local RAISE_STRING_TEXT = "serialize: serializeString value must be well-formed UTF-8 with no zero byte"
 local RAISE_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes"
 local RAISE_NOT_AN_OBJECT = "serialize: serializeObject requires a table with a serialize method"
+local RAISE_REJECT_NOT_READ = "serialize: reject is read only; a write or measure stream has nothing to refuse"
 
 -- ---------------------------------------------------------------------------
 -- Argument checks: a value serialize.go's parameter TYPE could not hold is the
@@ -1094,8 +1100,11 @@ end
 
 -- ---------------------------------------------------------------------------
 -- object (STANDARD.md object): object:serialize(stream) returns true, or false
--- and optionally the caller's own error value, which the stream latches (the
--- string "object" when none is given).
+-- and optionally the caller's own error value, which the stream latches;
+-- rejected when none is given (STANDARD.md, Refusal reasons: a nested object
+-- that fails with no refusal of its own refuses as rejected; IMPLEMENTING.md
+-- U2). It goes through the one latch, so a reason a primitive inside the
+-- object latched first is kept.
 
 function Shared.serializeObject(self: any, object: any): boolean
 	local method: any = if type(object) == "table" then object.serialize else nil
@@ -1107,9 +1116,23 @@ function Shared.serializeObject(self: any, object: any): boolean
 	end
 	local ok, err = (method :: any)(object, self)
 	if not ok then
-		return self:_fail(if err ~= nil then err else "object")
+		return self:_fail(if err ~= nil then err else REJECTED)
 	end
 	return self._error == nil
+end
+
+-- reject: the caller's own refusal of a value whose bytes were well formed
+-- (STANDARD.md, Refusal reasons, rejected; IMPLEMENTING.md U2). On a read it
+-- latches rejected through the one latch, so it is terminal and a reason
+-- latched first is kept, and it returns false, so a serialize method can
+-- `return stream:reject()`. It is read only: on a write or a measure there is
+-- nothing to refuse, and calling it there is API misuse, which raises as every
+-- other misuse does (IMPLEMENTING.md U9: moo is always checked).
+function Shared.reject(self: any): boolean
+	if self._kind ~= "read" then
+		error(RAISE_REJECT_NOT_READ, 2)
+	end
+	return self:_fail(REJECTED)
 end
 
 -- ---------------------------------------------------------------------------
