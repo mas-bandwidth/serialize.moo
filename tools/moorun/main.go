@@ -464,10 +464,19 @@ func inputsModule(root, testDir, rule string) ([]byte, error) {
 	for _, f := range corpus {
 		files = append(files, input{strings.TrimSuffix(filepath.Base(f), ".txt"), f})
 	}
-	if extraDir != "" && rule == "" {
-		extra, err := filepath.Glob(filepath.Join(extraDir, "*.txt"))
+	if rule == "" {
+		// conformance-regress/ (this port's fixed regression vectors) always
+		// joins an ordinary run; -extra adds a further directory
+		extra, err := filepath.Glob(filepath.Join(root, "conformance-regress", "*.txt"))
 		if err != nil {
 			return nil, err
+		}
+		if extraDir != "" {
+			more, err := filepath.Glob(filepath.Join(extraDir, "*.txt"))
+			if err != nil {
+				return nil, err
+			}
+			extra = append(extra, more...)
 		}
 		sort.Strings(extra)
 		for _, f := range extra {
