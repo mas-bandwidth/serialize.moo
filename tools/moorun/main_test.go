@@ -105,3 +105,42 @@ func TestCorpusOverrideNotADirectoryIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// -extra joins an ordinary run and never a control run: a control names
+// exactly the vectors its sabotaged reader must fail, so a generated file
+// beside the corpus would trip it.
+func TestExtraDirJoinsOrdinaryRunsOnly(t *testing.T) {
+	root, _, _ := fixture(t)
+	setDirs(t, "", "")
+	extra := t.TempDir()
+	if err := os.WriteFile(filepath.Join(extra, "diff.txt"), []byte("generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extraDir = extra
+	t.Cleanup(func() { extraDir = "" })
+	ordinary, err := inputsModule(root, filepath.Join(root, "test", "none"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ordinary), `["diff"]`) {
+		t.Errorf("an ordinary run does not carry the -extra file")
+	}
+	control, err := inputsModule(root, filepath.Join(root, "test", "none"), "some-rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(control), "diff") {
+		t.Errorf("a control run carries the -extra file")
+	}
+	if err := os.WriteFile(filepath.Join(extra, "vendored.txt"), []byte("clash\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inputsModule(root, filepath.Join(root, "test", "none"), ""); err == nil {
+		t.Errorf("an -extra file named like a corpus file was accepted")
+	}
+	extraDir = filepath.Join(extra, "missing")
+	var out, errOut bytes.Buffer
+	if code := run(root, nil, &out, &errOut); code == 0 {
+		t.Errorf("-extra naming no directory: run exited 0")
+	}
+}
