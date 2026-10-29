@@ -1,0 +1,11 @@
+# Fixed regression vectors for serialize.moo, taken from the reference's differential generator
+# (diffgen, seed 1, record 1409), as the reference wrote them. The runner took an empty last
+# string in an expect list, spelled as a trailing " |", for a missing entry.
+
+operation sequence
+name regress-empty-trailing-string
+param step = int -1000 1000
+param step = string 11
+bytes 00 00 E3 B5 A2 FE EF 8F 92 44
+expect value = -0x000000000000000000000000000003E8 | 
+consumed 16

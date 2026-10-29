@@ -38,7 +38,7 @@
 // on an interpreter that exits nonzero, on a directory that runs no test, and
 // on a missing or empty test/<name>/, naming it.
 //
-// Usage: moorun -root <repo> [-corpus <dir>] [-controls <dir>] [name...]; no
+// Usage: moorun -root <repo> [-corpus <dir>] [-controls <dir>] [-extra <dir>] [name...]; no
 // names runs every test/*/. The interpreter is $MOO, else <repo>/dist/moo/moo
 // (make dist-moo).
 //
@@ -68,10 +68,18 @@ import (
 // <root>/conformance-controls when set (-corpus, -controls).
 var corpusDir, controlsDir string
 
+// extraDir, set by -extra, is a directory of further *.txt corpus files (the
+// nightly differential's generated file) planted in ORDINARY runs only. A
+// control run never reads it: a control names exactly the vectors its sabotaged
+// reader must fail, so a file added to the corpus beside the controls would
+// trip every control that a generated vector also exercises.
+var extraDir string
+
 func main() {
 	root := flag.String("root", ".", "the repository root")
 	flag.StringVar(&corpusDir, "corpus", "", "the conformance/ directory (default <root>/conformance)")
 	flag.StringVar(&controlsDir, "controls", "", "the conformance-controls/ directory (default <root>/conformance-controls)")
+	flag.StringVar(&extraDir, "extra", "", "a directory of further corpus *.txt files, planted in ordinary runs and never in a control run")
 	flag.Parse()
 	os.Exit(run(*root, flag.Args(), os.Stdout, os.Stderr))
 }
@@ -95,7 +103,11 @@ func controlsPath(root string) string {
 // checkCorpusDirs refuses, by name, a corpus or controls directory that is
 // not a directory.
 func checkCorpusDirs(root string) error {
-	for _, d := range []struct{ flag, path string }{{"-corpus", corpusPath(root)}, {"-controls", controlsPath(root)}} {
+	dirs := []struct{ flag, path string }{{"-corpus", corpusPath(root)}, {"-controls", controlsPath(root)}}
+	if extraDir != "" {
+		dirs = append(dirs, struct{ flag, path string }{"-extra", extraDir})
+	}
+	for _, d := range dirs {
 		if fi, err := os.Stat(d.path); err != nil || !fi.IsDir() {
 			return fmt.Errorf("%s %s is not a directory", d.flag, d.path)
 		}
@@ -451,6 +463,31 @@ func inputsModule(root, testDir, rule string) ([]byte, error) {
 	sort.Strings(corpus)
 	for _, f := range corpus {
 		files = append(files, input{strings.TrimSuffix(filepath.Base(f), ".txt"), f})
+	}
+	if rule == "" {
+		// conformance-regress/ (this port's fixed regression vectors) always
+		// joins an ordinary run; -extra adds a further directory
+		extra, err := filepath.Glob(filepath.Join(root, "conformance-regress", "*.txt"))
+		if err != nil {
+			return nil, err
+		}
+		if extraDir != "" {
+			more, err := filepath.Glob(filepath.Join(extraDir, "*.txt"))
+			if err != nil {
+				return nil, err
+			}
+			extra = append(extra, more...)
+		}
+		sort.Strings(extra)
+		for _, f := range extra {
+			key := strings.TrimSuffix(filepath.Base(f), ".txt")
+			for _, g := range files {
+				if g.key == key {
+					return nil, fmt.Errorf("-extra file %s.txt is already in the corpus", key)
+				}
+			}
+			files = append(files, input{key, f})
+		}
 	}
 	controls, err := filepath.Glob(filepath.Join(controlsPath(root), "*.txt"))
 	if err != nil {

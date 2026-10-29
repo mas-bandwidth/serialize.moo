@@ -846,7 +846,13 @@ RUN.sequence = function(rec: any, r: any)
 		checkTerminal(r, rec.name)
 	else
 		check(ok, rec.name .. ": an accepted sequence was refused (" .. tostring(r:error()) .. ")")
-		local wants = string.split(rec.expect.value, " | ")
+		-- the line's trailing blank is trimmed by the parser, so an empty last
+		-- entry (an empty string) arrives as a value ending in " |"
+		local text: string = rec.expect.value
+		if string.sub(text, -2) == " |" then
+			text ..= " "
+		end
+		local wants = string.split(text, " | ")
 		check(#wants == #outcomes, rec.name .. ": expect lists " .. #wants .. " entries, the steps made " .. #outcomes)
 		for i, want in wants do
 			if want ~= "-" then
