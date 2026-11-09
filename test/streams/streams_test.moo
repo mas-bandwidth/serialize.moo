@@ -413,7 +413,7 @@ end
 -- the float forms (STANDARD.md, Finite values only): a number crosses the
 -- boundary; the Bits forms carry every FINITE pattern (-0, subnormals, values
 -- past every moo number), and a non-finite one is refused on read as
--- non_finite_float, the holder untouched, and latched on write. The reversed
+-- non_finite_float, the holder untouched, and traps on write. The reversed
 -- witness: under format 1.1 a signalling NaN's payload travelled through the
 -- Bits form; now it is refused both ways.
 function T.TestFloatForms()
@@ -432,7 +432,7 @@ function T.TestFloatForms()
 		local got = { value = 0 }
 		check(serialize.ReadStream.new(w2:data()):serializeFloatBits(got) and got.value == bits, string.format("0x%08X reads back exactly", bits))
 	end
-	-- non-finite patterns: refused on read, latched on write and on measure
+	-- non-finite patterns: refused on read, trapped on write and on measure
 	local function le32(bits: number): buffer
 		local b = buffer.create(4)
 		buffer.writeu32(b, 0, bits)

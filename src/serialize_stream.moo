@@ -35,11 +35,10 @@ local Uint64, Int64, Uint128, Int128 = Wide.Uint64, Wide.Int64, Wide.Uint128, Wi
 export type Holder<T> = { value: T }
 
 -- The refusal reasons (STANDARD.md, Refusal reasons): a closed list, spelled
--- exactly as every implementation spells them. A stream latches the FIRST
--- refusal's reason; later refusals on a failed stream are its echoes. A write
--- latches past_end when the buffer is full, value_out_of_range for a value
--- outside the range it is serialized with, and non_finite_float for a float
--- or double bit pattern that is NaN or an infinity, as serialize.go's writer.
+-- exactly as every implementation spells them. A read stream latches the FIRST
+-- refusal's reason; later refusals on a failed stream are its echoes. Write
+-- and measure misuse traps without latching (IMPLEMENTING.md U9, U6); a
+-- write also traps when the buffer is full.
 -- rejected (standard 2.1) is the one reason the wire never chooses: the
 -- caller's own refusal of a value whose bytes were well formed (reject, or a
 -- nested object whose serialize returns false; IMPLEMENTING.md U2).
@@ -753,8 +752,8 @@ end
 -- The format carries FINITE values only: a pattern whose exponent field is all
 -- ones (NaN with any payload, either infinity) is refused on read as
 -- non_finite_float, tested on the raw bits before the holder is written, and
--- latched as non_finite_float on write (and measure), as serialize.go's
--- writer does. Every finite pattern travels bit for bit.
+-- traps without latching on write and measure (IMPLEMENTING.md U9, U6).
+-- Every finite pattern travels bit for bit.
 --
 -- serializeFloatBits / serializeDoubleBits carry the finite IEEE bit pattern
 -- itself (a number in [0, 2^32), a Uint64), -0, the subnormals and values far
