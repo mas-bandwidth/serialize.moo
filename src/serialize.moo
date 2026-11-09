@@ -19,7 +19,8 @@ export type Holder<T> = Stream.Holder<T>
 
 local S = {}
 
--- The wire format version this library implements (STANDARD.md, Format version).
+-- The port release and the wire format it implements (STANDARD.md, Format version).
+S.VERSION = "2.1.2"
 S.FORMAT_VERSION = "2.0"
 
 -- the refusal reasons, STANDARD.md's closed list: stream:error() returns one

@@ -15,8 +15,7 @@ imported.
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
 and `conformance-controls/` (the unknown-operation control and the 18
 `*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.1.1 (`bd3d67e23c8acc2c45eff69633dbe16c029a2cba`; the rulings on U9 and
-U15 over v2.1.0, format 2.0, standard 2.1:
+v2.1.3 (`7bf1877b38cfdd737d0bf102a546ec2674335786`, format 2.0, standard 2.1:
 the `rejected` refusal reason, its `reject` vectors and controls, and the
 uniform rules U1 to U16 in IMPLEMENTING.md). CI diffs them against the tag; a
 change arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
@@ -44,6 +43,7 @@ on a refusal.
 
 | entry | what |
 |---|---|
+| `VERSION` | `"2.1.2"` (the port release) |
 | `FORMAT_VERSION` | `"2.0"` |
 | `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`, and `Rejected` (`"rejected"`, standard 2.1: the caller's own refusal); `stream:error()` returns one |
 | `WriteStream.new(buffer)`, `ReadStream.new(buffer)`, `MeasureStream.new()` | the streams |
@@ -317,8 +317,9 @@ control loads it through `../` and sees it raise).
   table of `Test<Name>` functions; a test fails by raising. A FAIL, an
   interpreter that exits nonzero, a directory with no test or a missing input
   fails the run: never a skip.
-- Unit tests use no real time, no sockets, no network and no outside
-  services.
+- Unit test code uses no real time, no sockets, no network and no outside
+  services. The Go `tools/moorun` harness starts a moo interpreter subprocess
+  for each test directory and each conformance control.
 - The conformance runner checks every refused vector's stated reason against
   the stream's first refusal, parses `writer_input`, runs `end` alone and as a
   step, and requires vector names unique across the corpus; a refusal with no
