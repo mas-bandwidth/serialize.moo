@@ -482,4 +482,158 @@ function T.TestFloatForms()
 	end
 end
 
+-- A span of a larger buffer, at offsets 0, 1 and 5, after a prefix of 0 through
+-- 63 bits. serializeBytes(data, offset, count) and BitWriter.writeBytes /
+-- BitReader.readBytes match the whole-buffer form on a copy of the span, and
+-- bytes outside the span in the destination stay put. writeBytes and readBytes
+-- require byte alignment, so the prefix is padded out to a byte first, the
+-- same padding serializeBytes writes itself.
+function T.TestByteSpan()
+	local count = 11
+	local tail = 4
+	local function mask(value: number, bits: number): number
+		if bits >= 32 then
+			return value
+		end
+		return bit32.band(value, 2 ^ bits - 1)
+	end
+	local function same(a: buffer, b: buffer): boolean
+		if buffer.len(a) ~= buffer.len(b) then
+			return false
+		end
+		for i = 0, buffer.len(a) - 1 do
+			if buffer.readu8(a, i) ~= buffer.readu8(b, i) then
+				return false
+			end
+		end
+		return true
+	end
+	local function outside(buf: buffer, offset: number, n: number, mark: number): boolean
+		for i = 0, offset - 1 do
+			if buffer.readu8(buf, i) ~= mark then
+				return false
+			end
+		end
+		for i = offset + n, buffer.len(buf) - 1 do
+			if buffer.readu8(buf, i) ~= mark then
+				return false
+			end
+		end
+		return true
+	end
+	local function at(prefix: number, offset: number)
+		local src = buffer.create(offset + count + tail)
+		buffer.fill(src, 0, 0xA5)
+		local expect = buffer.create(count)
+		for i = 0, count - 1 do
+			local b = i + 1
+			buffer.writeu8(src, offset + i, b)
+			buffer.writeu8(expect, i, b)
+		end
+		local first = math.min(prefix, 32)
+		local second = prefix - first
+		local v1 = if first > 0 then mask(0x13579BDF, first) else 0
+		local v2 = if second > 0 then mask(0x6AC0F135, second) else 0
+		local where = string.format("prefix %d offset %d", prefix, offset)
+
+		local function streamWire(data: buffer, span: boolean): buffer
+			local w = serialize.WriteStream.new(buffer.create(32))
+			if first > 0 then
+				check(w:serializeBits({ value = v1 }, first), where)
+			end
+			if second > 0 then
+				check(w:serializeBits({ value = v2 }, second), where)
+			end
+			if span then
+				check(w:serializeBytes(data, offset, count), where)
+			else
+				check(w:serializeBytes(data), where)
+			end
+			w:flush()
+			return w:data()
+		end
+		local spanWire = streamWire(src, true)
+		local wholeWire = streamWire(expect, false)
+		check(same(spanWire, wholeWire), where .. ": serializeBytes wire")
+
+		local function readStream(wire: buffer, dest: buffer, span: boolean)
+			local r = serialize.ReadStream.new(wire)
+			if first > 0 then
+				check(r:serializeBits({ value = 0 }, first), where)
+			end
+			if second > 0 then
+				check(r:serializeBits({ value = 0 }, second), where)
+			end
+			if span then
+				check(r:serializeBytes(dest, offset, count), where)
+			else
+				check(r:serializeBytes(dest), where)
+			end
+		end
+		local tight = buffer.create(count)
+		readStream(wholeWire, tight, false)
+		check(same(tight, expect), where .. ": whole read")
+		local dest = buffer.create(offset + count + tail)
+		buffer.fill(dest, 0, 0x5A)
+		readStream(spanWire, dest, true)
+		for i = 0, count - 1 do
+			check(buffer.readu8(dest, offset + i) == buffer.readu8(expect, i), where .. ": span read")
+		end
+		check(outside(dest, offset, count, 0x5A), where .. ": stream sentinels")
+
+		local function bitsWire(data: buffer, span: boolean): buffer
+			local w = serialize.BitWriter.new(buffer.create(32))
+			if first > 0 then
+				w:writeBits(v1, first)
+			end
+			if second > 0 then
+				w:writeBits(v2, second)
+			end
+			w:writeAlign()
+			if span then
+				w:writeBytes(data, offset, count)
+			else
+				w:writeBytes(data)
+			end
+			w:flushBits()
+			return w:data()
+		end
+		local bitsSpan = bitsWire(src, true)
+		local bitsWhole = bitsWire(expect, false)
+		check(same(bitsSpan, bitsWhole), where .. ": writeBytes wire")
+		check(same(bitsSpan, spanWire), where .. ": writeBytes matches serializeBytes")
+
+		local function readPacked(wire: buffer, into: buffer, span: boolean)
+			local r = serialize.BitReader.new(wire)
+			if first > 0 then
+				r:readBits(first)
+			end
+			if second > 0 then
+				r:readBits(second)
+			end
+			check(r:readAlign(), where .. ": align")
+			if span then
+				r:readBytes(into, offset, count)
+			else
+				r:readBytes(into)
+			end
+		end
+		local tightBits = buffer.create(count)
+		readPacked(bitsWhole, tightBits, false)
+		check(same(tightBits, expect), where .. ": bit whole read")
+		local destBits = buffer.create(offset + count + tail)
+		buffer.fill(destBits, 0, 0x5A)
+		readPacked(bitsSpan, destBits, true)
+		for i = 0, count - 1 do
+			check(buffer.readu8(destBits, offset + i) == buffer.readu8(expect, i), where .. ": bit span read")
+		end
+		check(outside(destBits, offset, count, 0x5A), where .. ": bit sentinels")
+	end
+	for prefix = 0, 63 do
+		at(prefix, 0)
+		at(prefix, 1)
+		at(prefix, 5)
+	end
+end
+
 return T

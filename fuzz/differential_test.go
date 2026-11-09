@@ -453,10 +453,15 @@ func genStep(r *rand.Rand, op string) step {
 		}
 		st.w = cat(words64(uint64(raw)), d[1:])
 	case "by":
-		st.payload = make([]byte, r.IntN(65))
+		// payload is the span. It sits at offset in a larger buffer, with tail bytes after it.
+		count := r.IntN(65)
+		offset := r.IntN(8)
+		tail := 1 + r.IntN(8)
+		st.payload = make([]byte, count)
 		for i := range st.payload {
 			st.payload[i] = byte(r.Uint32())
 		}
+		st.w = []uint32{uint32(offset), uint32(tail)}
 	case "s":
 		bufsize := 1 + r.IntN(100)
 		n := r.IntN(bufsize)
@@ -765,12 +770,14 @@ func run(s serialize.Stream, st step) (string, error) {
 		}
 		return numberToken(float64(v), err)
 	case "by":
-		data := make([]byte, len(st.payload))
+		offset, tail := int(w[0]), int(w[1])
+		count := len(st.payload)
+		data := bytes.Repeat([]byte{0xA5}, offset+count+tail)
 		if writing {
-			copy(data, st.payload)
+			copy(data[offset:offset+count], st.payload)
 		}
-		err := s.SerializeBytes(data)
-		return "B" + hexOf(data), err
+		err := s.SerializeBytes(data[offset : offset+count])
+		return "B" + hexOf(data[offset:offset+count]), err
 	case "s":
 		var v string
 		if writing {
