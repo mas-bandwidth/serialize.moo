@@ -386,17 +386,12 @@ W.divModU = divModU
 W.divModS = divModS
 W.fromNumber = fromNumber
 W.toNumber = toNumber
-W.isLimb = isLimb
-W.TWO32 = TWO32
-W.MASK32 = MASK32
-W.MAX_EXACT = MAX_EXACT
 
 -- ---------------------------------------------------------------------------
 -- The four classes. A value is a frozen table of n limbs at [1]..[n] with its
 -- class as metatable. Methods take wide values of the same class, or an
 -- integer-valued moo number, which converts.
 
-local classes: { [any]: boolean } = {}
 
 local function makeClass(name: string, n: number, signed: boolean): any
 	local C: any = {}
@@ -586,7 +581,6 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	meta.__unm = C.neg
 	meta.__tostring = C.toString
 
-	classes[C] = true
 	return C
 end
 
