@@ -625,10 +625,15 @@ end
 
 F.Float32 = table.freeze(Float32)
 
--- toFloat32Bits(x): the binary32 bits of a parameter given as a Float32 or a
--- number (the number by the boundary rule), or nil for anything else.
+-- toFloat32Bits(x): the binary32 bits of a parameter given as a Float32 or an
+-- integer-valued number (the number by the boundary rule), or nil for anything
+-- else. A fractional number is refused: Q48.16 cannot spell 0.01f, so a
+-- fractional parameter must be a Float32.
 function F.toFloat32Bits(x: any): number?
 	if type(x) == "number" then
+		if x ~= math.floor(x) then
+			return nil
+		end
 		return toFloatBits(x)
 	end
 	if getmetatable(x) == meta then
@@ -641,7 +646,7 @@ end
 function F.float32Bits(x: any, what: string): number
 	local bits = F.toFloat32Bits(x)
 	if bits == nil then
-		error("serialize: " .. what .. " must be a number or a Float32", 3)
+		error("serialize: " .. what .. " must be an integer-valued number or a Float32", 3)
 	end
 	return bits
 end
