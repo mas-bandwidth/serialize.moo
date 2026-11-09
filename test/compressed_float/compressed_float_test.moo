@@ -69,8 +69,10 @@ function T.TestCompressedFloatWitnesses()
 	-- moo number 0.01 (655 units, 0.0099945...) would make it 1001.
 	local m, b = serialize.compressedFloatParams(0, 10, Float32.parse("0.01"))
 	check(m == 1000 and b == 10, "[0,10] at 0.01f is 1000 steps in 10 bits")
-	local m2 = serialize.compressedFloatParams(0, 10, 0.01)
-	check(m2 == 1001, "the moo number 0.01 is 655 units, 1001 steps: the declaration must say Float32.parse")
+	-- integer moo numbers are declarations: the same steps as their Float32
+	local m2, b2 = serialize.compressedFloatParams(0, 10, 1)
+	check(m2 == 10 and b2 == 4, "[0,10] at 1 is 10 steps in 4 bits")
+	check(serialize.compressedFloatParams(-10, 10, Float32.fromNumber(1)) == 20, "[-10,10] at Float32 1 is 20 steps")
 	-- the fusion witness: value 0.005 over [0, 10] at 0.01f writes code 1
 	-- (one rounding of the product before + 0.5 gives 0 under an FMA)
 	local w = serialize.WriteStream.new(buffer.create(8))
@@ -94,6 +96,44 @@ function T.TestCompressedFloatWitnesses()
 	local h = { value = 0 }
 	check(serialize.ReadStream.new(w3:data()):serializeCompressedFloat(h, 0, 10, Float32.parse("0.01")), "read refused")
 	check(h.value == 5, "code 500 reads back as 5")
+end
+
+-- A fractional declaration parameter must be a Float32: a moo number is
+-- Q48.16, so 0.01 would be 655 / 65536 and not 0.01f. A fractional number
+-- traps on write, measure and compressedFloatParams, and a read refuses it as
+-- value_out_of_range before any bits move; integer numbers are accepted.
+function T.TestCompressedFloatFractionalNumberDeclaration()
+	local function traps(fn: () -> (), what: string)
+		local ok, err = pcall(fn)
+		check(not ok and string.find(tostring(err), "Float32", 1, true) ~= nil, what .. ": expected a raise naming Float32, got " .. tostring(err))
+	end
+	traps(function()
+		serialize.compressedFloatParams(0, 10, 0.01)
+	end, "compressedFloatParams res 0.01")
+	traps(function()
+		serialize.compressedFloatParams(0.5, 10, 1)
+	end, "compressedFloatParams min 0.5")
+	for _, s in { serialize.WriteStream.new(buffer.create(8)), serialize.MeasureStream.new() } do
+		traps(function()
+			s:serializeCompressedFloat({ value = 5 }, 0, 10, 0.01)
+		end, "res 0.01")
+		traps(function()
+			s:serializeCompressedFloat({ value = 5 }, 0, 10.5, 1)
+		end, "max 10.5")
+		traps(function()
+			s:serializeCompressedFloatPrecomputed({ value = 5 }, 1000, 10, 0.01, 0)
+		end, "delta 0.01")
+		check(s:bitsProcessed() == 0, "a refused declaration moved bits")
+		check(s:serializeCompressedFloat({ value = 5 }, 0, 10, Float32.parse("0.01")), "a Float32 declaration is accepted")
+		check(s:serializeCompressedFloat({ value = 5 }, -10, 10, 1), "an integer number declaration is accepted")
+	end
+	local r = serialize.ReadStream.new(buffer.fromstring("\xF4\x01\x00\x00"))
+	local h = { value = 777 }
+	check(not r:serializeCompressedFloat(h, 0, 10, 0.01), "a read accepted res 0.01")
+	check(r:error() == serialize.Refusal.ValueOutOfRange and r:bitsProcessed() == 0 and h.value == 777, "a read refuses res 0.01 as value_out_of_range before any bits move, got " .. tostring(r:error()))
+	local r2 = serialize.ReadStream.new(buffer.fromstring("\xF4\x01\x00\x00"))
+	local h2 = { value = 0 }
+	check(r2:serializeCompressedFloat(h2, 0, 10, Float32.parse("0.01")) and h2.value == 5, "code 500 at 0.01f reads 5")
 end
 
 -- The decode must be finite (STANDARD.md compressed_float): over

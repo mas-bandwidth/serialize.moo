@@ -992,7 +992,7 @@ local function compressedMethod(asBits: boolean, precomputed: boolean, name: str
 				return false
 			end
 			local db, mb = Float.toFloat32Bits(c), Float.toFloat32Bits(d)
-			if not needDecl(self, db ~= nil, name, "delta", "a number or a Float32") or not needDecl(self, mb ~= nil, name, "min", "a number or a Float32") then
+			if not needDecl(self, db ~= nil, name, "delta", "an integer-valued number or a Float32") or not needDecl(self, mb ~= nil, name, "min", "an integer-valued number or a Float32") then
 				return false
 			end
 			maxIntegerValue, bits, delta, min = a, b, db :: number, mb :: number
@@ -1002,7 +1002,7 @@ local function compressedMethod(asBits: boolean, precomputed: boolean, name: str
 		else
 			-- (min, max, res)
 			local mnb, mxb, rb = Float.toFloat32Bits(a), Float.toFloat32Bits(b), Float.toFloat32Bits(c)
-			if not needDecl(self, mnb ~= nil, name, "min", "a number or a Float32") or not needDecl(self, mxb ~= nil, name, "max", "a number or a Float32") or not needDecl(self, rb ~= nil, name, "res", "a number or a Float32") then
+			if not needDecl(self, mnb ~= nil, name, "min", "an integer-valued number or a Float32") or not needDecl(self, mxb ~= nil, name, "max", "an integer-valued number or a Float32") or not needDecl(self, rb ~= nil, name, "res", "an integer-valued number or a Float32") then
 				return false
 			end
 			min = mnb :: number
