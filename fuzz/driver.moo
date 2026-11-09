@@ -202,9 +202,22 @@ local function step(s: any, st: Step): (boolean, string)
 		end
 		return ok, if ok and not writing then wide(Int64.fromNumberRaw(h.value), 2) else ""
 	elseif op == "by" then
-		local data = if writing then bufOf(st.hex) else buffer.create(#st.hex // 2)
-		local ok = s:serializeBytes(data)
-		return ok, "B" .. hexOf(data)
+		-- the payload sits at offset in a larger buffer; tail bytes follow the span
+		local span = if writing then bufOf(st.hex) else buffer.create(#st.hex // 2)
+		local count = buffer.len(span)
+		local offset = w[1]
+		local tail = w[2]
+		local data = buffer.create(offset + count + tail)
+		buffer.fill(data, 0, 0xA5)
+		if writing and count > 0 then
+			buffer.copy(data, offset, span, 0, count)
+		end
+		local ok = s:serializeBytes(data, offset, count)
+		local got = buffer.create(count)
+		if count > 0 then
+			buffer.copy(got, 0, data, offset, count)
+		end
+		return ok, "B" .. hexOf(got)
 	elseif op == "s" then
 		local h = { value = if writing then buffer.tostring(bufOf(st.hex)) else "" }
 		local ok = s:serializeString(h, w[1])
