@@ -19,13 +19,26 @@ concurrency:
 
 jobs:
   test:
-    name: test on the pinned moo
+    name: test on the pinned moo (${{ matrix.moo }})
     # The repository is public and these are the fleet's self-hosted runners
     # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
     # request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 20
+    # release: the pin as embedders ship it; checked: the pin built with
+    # -DMOO_OVERFLOW_ERRORS=ON, where arithmetic past 2^47 - 1 raises instead
+    # of saturating. The two run in parallel.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - moo: release
+            suffix: ''
+            dist: dist/moo
+          - moo: checked
+            suffix: '-checked'
+            dist: dist/moo-checked
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,34 +52,46 @@ jobs:
           test -n "$pin"
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
 
-      - name: Cache dist/moo
+      - name: Cache ${{ matrix.dist }}
         uses: actions/cache@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: ${{ matrix.dist }}
+          key: moo${{ matrix.suffix }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
 
       # dist-moo refuses a checkout that is not the pin; a cached dist/moo
       # whose PIN file is the pin is used as it is
-      - name: Build the pinned moo
+      - name: Build the pinned moo (${{ matrix.moo }})
         run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+          if [ "$(cat ${{ matrix.dist }}/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo${{ matrix.suffix }} JOBS=4; fi
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: tools/moorun/go.mod
           cache: false
 
+      # test-checked first runs checked-control: 2^47 must raise number
+      # overflow on the checked moo, or the run proves nothing
       - name: Test
-        run: make test
+        run: make test${{ matrix.suffix }}
 
   fuzz:
-    name: differential fuzz against serialize.go, and its negative control
+    name: differential fuzz against serialize.go on the pinned moo (${{ matrix.moo }})
     # The repository is public and these are the fleet's self-hosted runners
     # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
     # request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - moo: release
+            suffix: ''
+            dist: dist/moo
+          - moo: checked
+            suffix: '-checked'
+            dist: dist/moo-checked
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,15 +105,15 @@ jobs:
           test -n "$pin"
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
 
-      - name: Cache dist/moo
+      - name: Cache ${{ matrix.dist }}
         uses: actions/cache@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: ${{ matrix.dist }}
+          key: moo${{ matrix.suffix }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
 
-      - name: Build the pinned moo
+      - name: Build the pinned moo (${{ matrix.moo }})
         run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+          if [ "$(cat ${{ matrix.dist }}/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo${{ matrix.suffix }} JOBS=4; fi
 
       - uses: actions/setup-go@v5
         with:
@@ -98,11 +123,17 @@ jobs:
       # the smoke: 2000 programs on the fixed seed (the nightly runs an hour on a
       # varying one, nightly-fuzz.yml)
       - name: Differential fuzz (fixed seed)
-        run: make fuzz
+        run: make fuzz${{ matrix.suffix }}
 
       # the reversed witness: -widen-int must go red on the writers' bytes
       - name: Negative control (-widen-int must go red)
+        if: matrix.moo == 'release'
         run: make fuzz-control
+
+      # the reversed witness for the checked moo: 2^47 must raise
+      - name: Negative control (2^47 must raise on the checked moo)
+        if: matrix.moo == 'checked'
+        run: make checked-control
 
   corpus:
     name: STANDARD.md and the corpus match the pin

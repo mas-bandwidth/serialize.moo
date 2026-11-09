@@ -12,10 +12,16 @@
 # make roadmap        ROADMAP.md from docs/roadmap.sexp (make roadmap-check: the drift gate)
 # make fuzz           the differential fuzz against serialize.go v2 (fuzz/; functional: it runs moo)
 # make fuzz-control   its negative control: the -widen-int run must go red
+# make dist-moo-checked  the pin again, checked (-DMOO_OVERFLOW_ERRORS=ON), into dist/moo-checked/
+# make checked-control   its negative control: 2^47 must raise number overflow on it
+# make test-checked      checked-control, then make test on the checked moo
+# make fuzz-checked      make fuzz on the checked moo
 
 MOO_REPO   := https://github.com/mas-bandwidth/moo.git
 MOO_PIN    := f60f0239f41c6c0a827ecee44a7f9539c5798068
 MOO_DIST   := $(CURDIR)/dist/moo
+MOO_CHECKED_DIST := $(CURDIR)/dist/moo-checked
+MOO_CHECKED := MOO=$(MOO_CHECKED_DIST)/moo MOO_ANALYZE=$(MOO_CHECKED_DIST)/moo-analyze
 MOO        ?= $(MOO_DIST)/moo
 MOO_ANALYZE ?= $(MOO_DIST)/moo-analyze
 export MOO
@@ -29,21 +35,31 @@ MOORUN_FLAGS ?=
 MOORUN := build/moorun
 ORACLE_CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -Werror -ffp-contract=off
 
-.PHONY: all dist-moo toolchain lint analyze oracles moorun-unit test fuzz fuzz-analyze fuzz-control clean
+.PHONY: all dist-moo dist-moo-checked toolchain checked-control lint analyze oracles moorun-unit test test-checked fuzz fuzz-analyze fuzz-control fuzz-checked clean
 all: test
 
 # dist-moo clones the pinned commit and builds the CLI and the analyzer. It
 # refuses a checkout whose HEAD is not the pin, before anything is built.
+# moo-build: $(1) the dist directory, $(2) the tree name under build/, $(3) extra cmake flags.
+define moo-build
+	@rm -rf build/$(2)-src && mkdir -p build/$(2)-src $(1)
+	@cd build/$(2)-src && git init -q && git fetch -q --depth 1 $(MOO_REPO) $(MOO_PIN) && git checkout -q FETCH_HEAD
+	@got=$$(git -C build/$(2)-src rev-parse HEAD); if [ "$$got" != "$(MOO_PIN)" ]; then \
+		echo "$@ REFUSES: the checkout is $$got, not the pin $(MOO_PIN)"; exit 1; fi
+	@cmake -S build/$(2)-src -B build/$(2)-build -DCMAKE_BUILD_TYPE=Release $(3) >/dev/null
+	@cmake --build build/$(2)-build --target Luau.Repl.CLI Luau.Analyze.CLI -j $(JOBS) >/dev/null
+	@cp build/$(2)-build/moo build/$(2)-build/moo-analyze $(1)/
+	@echo $(MOO_PIN) > $(1)/PIN
+	@echo "$@: moo $(MOO_PIN) at $(1)"
+endef
+
 dist-moo:
-	@rm -rf build/moo-src && mkdir -p build/moo-src $(MOO_DIST)
-	@cd build/moo-src && git init -q && git fetch -q --depth 1 $(MOO_REPO) $(MOO_PIN) && git checkout -q FETCH_HEAD
-	@got=$$(git -C build/moo-src rev-parse HEAD); if [ "$$got" != "$(MOO_PIN)" ]; then \
-		echo "dist-moo REFUSES: the checkout is $$got, not the pin $(MOO_PIN)"; exit 1; fi
-	@cmake -S build/moo-src -B build/moo-build -DCMAKE_BUILD_TYPE=Release >/dev/null
-	@cmake --build build/moo-build --target Luau.Repl.CLI Luau.Analyze.CLI -j $(JOBS) >/dev/null
-	@cp build/moo-build/moo build/moo-build/moo-analyze $(MOO_DIST)/
-	@echo $(MOO_PIN) > $(MOO_DIST)/PIN
-	@echo "dist-moo: moo $(MOO_PIN) at $(MOO_DIST)"
+	$(call moo-build,$(MOO_DIST),moo,)
+
+# dist-moo-checked: the same pin built checked, where arithmetic past 2^47 - 1
+# raises number overflow instead of saturating.
+dist-moo-checked:
+	$(call moo-build,$(MOO_CHECKED_DIST),moo-checked,-DMOO_OVERFLOW_ERRORS=ON)
 
 # toolchain refuses, by name, a moo that does not resolve or is not the pin.
 toolchain:
@@ -52,8 +68,31 @@ toolchain:
 		if ! command -v "$$path" >/dev/null 2>&1; then \
 			echo "toolchain REFUSES: $$name=$$path does not resolve; run make dist-moo (or set $$name)"; exit 1; fi; \
 	done
-	@if [ "$(MOO)" = "$(MOO_DIST)/moo" ] && [ "$$(cat $(MOO_DIST)/PIN 2>/dev/null)" != "$(MOO_PIN)" ]; then \
-		echo "toolchain REFUSES: dist/moo is not the pin $(MOO_PIN); run make dist-moo"; exit 1; fi
+	@for dist in $(MOO_DIST) $(MOO_CHECKED_DIST); do \
+		if [ "$(MOO)" = "$$dist/moo" ] && [ "$$(cat $$dist/PIN 2>/dev/null)" != "$(MOO_PIN)" ]; then \
+			echo "toolchain REFUSES: $$dist is not the pin $(MOO_PIN); rebuild it (make dist-moo or make dist-moo-checked)"; exit 1; fi; \
+	done
+
+# checked-control: the reversed witness for the checked moo. 2^47 - 1 is the
+# largest integer moo holds; it must print, and one more must raise number
+# overflow, or the checked runs below prove nothing.
+CHECKED_CONTROL := build/checked-control.moo
+checked-control:
+	@if [ "$$(cat $(MOO_CHECKED_DIST)/PIN 2>/dev/null)" != "$(MOO_PIN)" ]; then \
+		echo "checked-control REFUSES: dist/moo-checked is not the pin $(MOO_PIN); run make dist-moo-checked"; exit 1; fi
+	@mkdir -p build
+	@printf 'local half = 2 ^ 46\nprint(half + (half - 1))\nprint(half + half)\n' > $(CHECKED_CONTROL)
+	@out=$$($(MOO_CHECKED_DIST)/moo $(CHECKED_CONTROL) 2>&1); status=$$?; \
+	if [ $$status -eq 0 ]; then echo "checked-control REFUSES: 2^47 did not raise on the checked moo: $$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q '^140737488355327$$'; then echo "checked-control REFUSES: 2^47 - 1 did not print on the checked moo: $$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q 'number overflow'; then echo "checked-control REFUSES: the checked moo failed, but not with number overflow: $$out"; exit 1; fi; \
+	echo "checked-control: 2^47 - 1 printed and 2^47 raised number overflow on the checked moo, as it must"
+
+test-checked: checked-control
+	@$(MAKE) --no-print-directory test $(MOO_CHECKED)
+
+fuzz-checked:
+	@$(MAKE) --no-print-directory fuzz $(MOO_CHECKED)
 
 # lint: loading is closed (every require in src/ is a literal ./serialize_<name>),
 # and CI runs on the fleet only (tools/check-ci.sh).
