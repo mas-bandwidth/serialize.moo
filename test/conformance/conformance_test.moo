@@ -962,7 +962,7 @@ local function corpus(): { any }
 	return recordsOf(inputs, corpusNames())
 end
 
-local CORPUS_SIZE = 413 -- serialize v2.1.0
+local CORPUS_SIZE = 413 -- serialize v2.1.3
 
 if inputs.CONTROL ~= nil then
 	-- control mode: the vectors that fail are exactly the .expected list
@@ -1021,7 +1021,7 @@ function T.TestConformanceCorpus()
 	print("  conformance: " .. #records .. " vectors in " .. #names .. " files, all passed, every refusal for its stated reason")
 	print("  number form: " .. stats.numberForm .. " float, double and compressed_float vectors re-run across the boundary, " .. stats.numberRefused .. " finite ones refused by it (no moo number)")
 	print("  fixed number: " .. stats.fixedNumber .. " Q48.16 vectors re-run as moo numbers")
-	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.1.0 has " .. CORPUS_SIZE)
+	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.1.3 has " .. CORPUS_SIZE)
 end
 
 -- The first control (STANDARD.md): conformance-controls/unknown-operation.txt
