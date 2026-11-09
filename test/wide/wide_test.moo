@@ -89,4 +89,62 @@ function T.TestNumberConversions()
 	eq(Int128.toInt64(Int128.parse("0x1FFFFFFFFFFFFFFFF")), "-1", "narrowing truncates")
 end
 
+-- zig-zag (serialize.go SignedToUnsigned, UnsignedToSigned): 0, -1, 1, -2, 2
+-- map to 0, 1, 2, 3, 4, across the whole int32 / uint32 domain
+function T.TestZigZag()
+	for _, c in { { 0, 0 }, { -1, 1 }, { 1, 2 }, { -2, 3 }, { 2, 4 }, { 1000, 2000 }, { -1000, 1999 }, { 2147483647, 4294967294 }, { -2147483648, 4294967295 } } do
+		check(serialize.signedToUnsigned(c[1]) == c[2], "signedToUnsigned(" .. c[1] .. ") is " .. serialize.signedToUnsigned(c[1]) .. ", want " .. c[2])
+		check(serialize.unsignedToSigned(c[2]) == c[1], "unsignedToSigned(" .. c[2] .. ") is " .. serialize.unsignedToSigned(c[2]) .. ", want " .. c[1])
+	end
+	for _, bad in { 2147483648, -2147483649, 1.5 } do
+		check(not pcall(serialize.signedToUnsigned, bad), "signedToUnsigned(" .. bad .. ") raises")
+	end
+	for _, bad in { -1, 4294967296, 0.5 } do
+		check(not pcall(serialize.unsignedToSigned, bad), "unsignedToSigned(" .. bad .. ") raises")
+	end
+end
+
+-- bitsRequired64 / bitsRequired128: the bit length of max - min, subtracted in
+-- the unsigned domain (a min above max wraps)
+function T.TestBitsRequiredWide()
+	local u64max = Uint64.parse("0xFFFFFFFFFFFFFFFF")
+	local u128max = Uint128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+	for _, c in {
+		{ 0, 0, 0 }, { 7, 7, 0 }, { 0, 1, 1 }, { 0, 4294967295, 32 }, { 0, Uint64.parse("4294967296"), 33 },
+		{ 5, Uint64.parse("0x1000000000000004"), 60 }, { 5, Uint64.parse("0x1000000000000005"), 61 }, { 0, u64max, 64 }, { 1, 0, 64 }, { u64max, u64max, 0 },
+	} do
+		check(serialize.bitsRequired64(c[1], c[2]) == c[3], "bitsRequired64(" .. tostring(c[1]) .. ", " .. tostring(c[2]) .. ") is " .. serialize.bitsRequired64(c[1], c[2]) .. ", want " .. c[3])
+	end
+	for _, c in {
+		{ 0, 0, 0 }, { 7, 7, 0 }, { 0, 1, 1 }, { 0, Uint128.parse("18446744073709551615"), 64 }, { 0, Uint128.lsh(1, 64), 65 },
+		{ 3, Uint128.lsh(1, 100), 100 }, { 0, u128max, 128 }, { 1, 0, 128 }, { u128max, u128max, 0 },
+	} do
+		check(serialize.bitsRequired128(c[1], c[2]) == c[3], "bitsRequired128(" .. tostring(c[1]) .. ", " .. tostring(c[2]) .. ") is " .. serialize.bitsRequired128(c[1], c[2]) .. ", want " .. c[3])
+	end
+end
+
+-- band, bor, bxor and bnot act on every limb, in every class
+function T.TestBitwise()
+	local a, b = Uint64.parse("0xFF00FF00FF00FF00"), Uint64.parse("0x0FF00FF00FF00FF0")
+	eq(Uint64.band(a, b), "1080880403494997760", "uint64 band is 0x0F000F000F000F00")
+	eq(Uint64.bor(a, b), "18442521884633399280", "uint64 bor is 0xFFF0FFF0FFF0FFF0")
+	eq(Uint64.bxor(a, b), "17361641481138401520", "uint64 bxor is 0xF0F0F0F0F0F0F0F0")
+	eq(Uint64.bnot(a), "71777214294589695", "uint64 bnot is 0x00FF00FF00FF00FF")
+	eq(Uint64.bnot(0), "18446744073709551615", "uint64 bnot 0 is all ones")
+	eq(Int64.bnot(0), "-1", "int64 bnot 0 is -1")
+	eq(Int64.bnot(5), "-6", "int64 bnot 5 is -6")
+	eq(Int64.band(-1, Int64.parse("0x7FFFFFFF00000001")), "9223372032559808513", "int64 band with -1 is the other")
+	eq(Int64.bxor(-1, Int64.parse("9223372036854775807")), "-9223372036854775808", "int64 bxor flips the sign bit")
+	eq(Int64.bor(Int64.parse("-9223372036854775808"), 1), "-9223372036854775807", "int64 bor sets bit 0")
+	local c, d = Uint128.parse("0xFFFFFFFF00000000FFFFFFFF00000000"), Uint128.parse("0xFFFF0000FFFF0000FFFF0000FFFF")
+	check(Uint128.band(c, d) == Uint128.parse("0xFFFF000000000000FFFF00000000"), "uint128 band")
+	check(Uint128.bor(c, d) == Uint128.parse("0xFFFFFFFF0000FFFFFFFFFFFF0000FFFF"), "uint128 bor")
+	check(Uint128.bxor(c, d) == Uint128.parse("0xFFFF00000000FFFFFFFF00000000FFFF"), "uint128 bxor")
+	check(Uint128.bnot(c) == Uint128.parse("0xFFFFFFFF00000000FFFFFFFF"), "uint128 bnot")
+	eq(Int128.bnot(5), "-6", "int128 bnot 5 is -6")
+	eq(Int128.band(-1, Int128.parse("0x1FFFFFFFFFFFFFFFF")), "36893488147419103231", "int128 band with -1 is the other")
+	eq(Int128.bxor(-1, Int128.parse("170141183460469231731687303715884105727")), "-170141183460469231731687303715884105728", "int128 bxor flips the sign bit")
+	eq(Int128.bor(Int128.lsh(1, 96), Int128.lsh(1, 32)), "79228162514264337597838917632", "int128 bor joins limbs 1 and 3")
+end
+
 return T
