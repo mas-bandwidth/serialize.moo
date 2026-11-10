@@ -587,7 +587,6 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	meta.__mul = C.mul
 	meta.__unm = C.neg
 	meta.__tostring = C.toString
-	meta.__metatable = meta
 	table.freeze(meta)
 
 	return C

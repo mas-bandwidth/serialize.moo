@@ -619,7 +619,6 @@ end
 meta.__tostring = function(f: any): string
 	return string.format("Float32(0x%08X)", f.bits)
 end
-meta.__metatable = meta
 table.freeze(meta)
 
 F.Float32 = table.freeze(Float32)
