@@ -174,4 +174,27 @@ function T.TestEq()
 	check(not Uint128.eq(Uint128.fromNumber(7), 8), "uint128 wide differs from a number")
 end
 
+-- The class tables and the metatables their values share are frozen: an
+-- assignment to either raises.
+local function frozen(name: string, class: any, value: any)
+	local meta: any = getmetatable(value)
+	check(not pcall(function()
+		class.notAFunction = 1
+	end), name .. " class table is frozen")
+	check(not pcall(function()
+		meta.notAFunction = 1
+	end), name .. " metatable is frozen")
+end
+
+function T.TestWideClassesFrozen()
+	frozen("Uint64", Uint64, Uint64.fromNumber(0))
+	frozen("Int64", Int64, Int64.fromNumber(0))
+	frozen("Uint128", Uint128, Uint128.fromNumber(0))
+	frozen("Int128", Int128, Int128.fromNumber(0))
+end
+
+function T.TestFloat32Frozen()
+	frozen("Float32", serialize.Float32, serialize.Float32.fromNumber(0))
+end
+
 return T

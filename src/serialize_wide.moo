@@ -588,6 +588,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	meta.__unm = C.neg
 	meta.__tostring = C.toString
 
+	table.freeze(meta)
 	return C
 end
 
@@ -676,5 +677,10 @@ function W.Int64.toNumberRaw(x: any): number?
 	end
 	return w + frac / TWO16
 end
+
+table.freeze(W.Uint64)
+table.freeze(W.Int64)
+table.freeze(W.Uint128)
+table.freeze(W.Int128)
 
 return table.freeze(W)
