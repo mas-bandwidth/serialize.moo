@@ -21,9 +21,8 @@ concurrency:
 jobs:
   test:
     name: test on the pinned moo
-    # The repository is public and these are the fleet's self-hosted runners
-    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
-    # request from a fork never runs on them.
+    # The repository is public and these are the fleet's self-hosted runners:
+    # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 20
@@ -62,9 +61,8 @@ jobs:
 
   fuzz:
     name: differential fuzz against serialize.go, and its negative control
-    # The repository is public and these are the fleet's self-hosted runners
-    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
-    # request from a fork never runs on them.
+    # The repository is public and these are the fleet's self-hosted runners:
+    # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 15
@@ -107,9 +105,8 @@ jobs:
 
   corpus:
     name: STANDARD.md and the corpus match the pin
-    # The repository is public and these are the fleet's self-hosted runners
-    # (serialize.moo's own set, fleet/runners.tsv in rowan-tools): a pull
-    # request from a fork never runs on them.
+    # The repository is public and these are the fleet's self-hosted runners:
+    # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 5

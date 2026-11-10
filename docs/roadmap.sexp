@@ -176,7 +176,7 @@
   (:id "checks/loading" :type :work-set :children ("checks-loading"))
   (:id "checks-analyze" :type :task :title "moo-analyze --!strict over every source file" :state :done :evidence ("make analyze (mas-bandwidth/serialize.moo PR #1)"))
   (:id "checks/analyze" :type :work-set :children ("checks-analyze"))
-  (:id "checks-ci" :type :task :title "CI on the fleet runners" :state :done :evidence (".github/workflows/ci.yml on serialize.moo's amd-2 repo runner (mas-bandwidth/serialize.moo PR #1, PR #2)"))
+  (:id "checks-ci" :type :task :title "CI on the fleet runners" :state :done :evidence (".github/workflows/ci.yml on the fleet's self-hosted runners (mas-bandwidth/serialize.moo PR #1, PR #2)"))
   (:id "checks/ci" :type :work-set :children ("checks-ci"))
   (:id "checks-fuzz" :type :task :title "Differential fuzzing against serialize.go" :state :done :evidence ("fuzz/differential_test.go TestDifferentialAgainstSerializeGo with fuzz/driver.moo, make fuzz: every operation, identical bytes and measures, cross reads, mutation agreement (mas-bandwidth/serialize.moo PR #4)" "make fuzz-control: the -widen-int negative control goes red on the writers' bytes (mas-bandwidth/serialize.moo PR #4)" ".github/workflows/ci.yml fuzz job and .github/workflows/nightly-fuzz.yml, an hour nightly on a varying logged seed (mas-bandwidth/serialize.moo PR #4)"))
   (:id "checks/fuzz" :type :work-set :children ("checks-fuzz"))
