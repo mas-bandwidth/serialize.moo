@@ -99,8 +99,9 @@ measure it records nothing and returns `false` (U6, U9).
 
 Wide parameters (`min`, `max` of int64, int128 and fixed) and wide values on
 write take the class or an integer-valued number; reads always produce the
-class. Compressed float parameters take a number (converted by the boundary
-rule) or a `Float32`.
+class. Compressed float parameters take an integer-valued number (converted
+by the boundary rule) or a `Float32`; a fractional number such as `0.01`
+raises on write and measure and is refused on read.
 
 Misuse on a write or a measure raises, naming the rule, with serialize.go's
 panic text, before anything else and even on a stream with a latched error:

@@ -78,7 +78,7 @@ end
 
 -- compressedFloatParams(min, max, res): the precomputed compressed float
 -- constants (maxIntegerValue, bits, delta as a Float32); min, max and res are
--- numbers (by the boundary rule) or Float32 values.
+-- integer-valued numbers (by the boundary rule) or Float32 values.
 S.compressedFloatParams = Stream.compressedFloatParams
 
 -- refusalName(reason): a latched reason's name as STANDARD.md spells it, or
