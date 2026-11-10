@@ -29,7 +29,7 @@ jobs:
     # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
-    timeout-minutes: 2
+    timeout-minutes: 5
     outputs:
       key: ${{ steps.pin.outputs.key }}
     steps:
