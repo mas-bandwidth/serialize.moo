@@ -110,7 +110,8 @@ range, int bounds outside int32 (U5), a ranged `min > max`, int64 or int128
 bounds the class does not hold, a fixed point Q format or bounds that do not
 fit, a `serializeFixedNumber` max past 2^47 - 1, an int_relative `previous`
 outside [0, 2147483647], a compressed float declaration that is not `min <
-max` and `res > 0`, precomputed constants whose `bits` is not
+max` and `res > 0` or whose `delta` or `delta / res` is not finite in
+float32, precomputed constants whose `bits` is not
 `bitsRequired(0, maxIntegerValue)`, whose `maxIntegerValue` is outside [1,
 4294967040] or whose `delta` is not positive and finite, a string buffer size
 below 1, a bytes range outside its buffer, an object that is not one, and a
@@ -123,8 +124,8 @@ write misuse too, and traps the same way, never latching (IMPLEMENTING.md
 v2.1.1, U9): a write past the room left in the buffer, a value outside its
 range, a non-finite float, double or compressed_float value, a string past its
 buffer size, and a compressed_float declaration whose `delta` or `delta / res`
-is not finite in float32 (never clamped on a write or a measure; a read clamps
-it, as every reader does). A write or a measure stream has no refusal state:
+is not finite in float32 (never clamped; a read refuses it as
+`value_out_of_range` before any bits move, U7, U16). A write or a measure stream has no refusal state:
 misuse records nothing, and a later operation succeeds. A measure makes every
 check a write makes except the room (U6). A write checks room for the whole operation,
 length, align and payload, before it writes any of it (U10), and a value

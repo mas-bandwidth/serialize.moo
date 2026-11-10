@@ -463,7 +463,8 @@ end
 -- The check model: a compressed_float declaration whose delta or delta / res
 -- is not finite in float32 traps on write and measure, never clamped (it was
 -- silently clamped to 4294967040 values); compressedFloatParams traps on it,
--- as the reference's compressed_float_params asserts. A read is unchanged.
+-- as the reference's compressed_float_params asserts. A read refuses it as
+-- value_out_of_range before any bits move (U7, U16).
 function T.TestCompressedDeclarationNotFiniteTraps()
 	local mn, mx, res = 0, Float32.parse("1e38"), Float32.parse("1e-38")
 	local w = serialize.WriteStream.new(buffer.create(8))
@@ -474,10 +475,13 @@ function T.TestCompressedDeclarationNotFiniteTraps()
 	traps(m, function() m:serializeCompressedFloatBits({ value = 0 }, Float32.parse("-3e38"), Float32.parse("3e38"), 1) end, "finite", "measure a delta past FLT_MAX")
 	local ok = pcall(serialize.compressedFloatParams, mn, mx, res)
 	check(not ok, "compressedFloatParams (0, 1e38, 1e-38) did not trap")
-	-- a read still clamps the declaration and reads
-	local r = serialize.ReadStream.new(buffer.create(8))
-	local h = { value = 99 }
-	check(r:serializeCompressedFloat(h, mn, mx, res) and h.value == 0, "a read of (0, 1e38, 1e-38) is unchanged")
+	-- a read refuses the declaration, never clamps it
+	refusedBeforeBits("read (0, 1e38, 1e-38)", function(r, h)
+		return r:serializeCompressedFloat(h, mn, mx, res)
+	end)
+	refusedBeforeBits("read a delta past FLT_MAX", function(r, h)
+		return r:serializeCompressedFloatBits(h, Float32.parse("-3e38"), Float32.parse("3e38"), 1)
+	end)
 end
 
 -- U15. copyString is defined on bytes: every vector of the reference's
