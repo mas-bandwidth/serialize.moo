@@ -287,22 +287,6 @@ end
 -- ---------------------------------------------------------------------------
 -- bits, bool and the fixed-width unsigned integers (STANDARD.md bits, bool).
 
--- fixedWidth runs a no-parameter method of width n: write the masked value,
--- read it, or measure n.
-local function fixedWidth(s: any, n: number, writeValue: () -> number): (boolean, number?)
-	if s._error ~= nil then
-		return false, nil
-	end
-	if not s:_room(n) then
-		return s:_fail(PAST_END), nil
-	end
-	if s._kind == "read" then
-		return true, s:_get(n)
-	end
-	s:_put(writeValue(), n)
-	return true, nil
-end
-
 function Shared.serializeBits(self: any, h: any, bits: number): boolean
 	if not bitsArg(self, bits, 32, RAISE_BITS_RANGE) then
 		return false
@@ -312,13 +296,18 @@ function Shared.serializeBits(self: any, h: any, bits: number): boolean
 		-- measure checks what a write checks (U6)
 		uintArg(h.value, bits, "serializeBits", "value")
 	end
-	local ok, v = fixedWidth(self, bits, function()
-		return bit32.band(h.value, MASK[bits])
-	end)
-	if ok and v ~= nil then
-		h.value = v
+	if self._error ~= nil then
+		return false
 	end
-	return ok
+	if not self:_room(bits) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind == "read" then
+		h.value = self:_get(bits)
+	else
+		self:_put(bit32.band(h.value, MASK[bits]), bits)
+	end
+	return true
 end
 
 function Shared.serializeBits64(self: any, h: any, bits: number): boolean
@@ -349,13 +338,18 @@ function Shared.serializeBool(self: any, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "boolean", "serializeBool", "value", "a boolean")
 	end
-	local ok, v = fixedWidth(self, 1, function()
-		return if h.value then 1 else 0
-	end)
-	if ok and v ~= nil then
-		h.value = v ~= 0
+	if self._error ~= nil then
+		return false
 	end
-	return ok
+	if not self:_room(1) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind == "read" then
+		h.value = self:_get(1) ~= 0
+	else
+		self:_put(if h.value then 1 else 0, 1)
+	end
+	return true
 end
 
 local function uintMethod(bits: number, name: string)
@@ -363,13 +357,18 @@ local function uintMethod(bits: number, name: string)
 		if self._kind ~= "read" then
 			uintArg(h.value, bits, name, "value")
 		end
-		local ok, v = fixedWidth(self, bits, function()
-			return h.value
-		end)
-		if ok and v ~= nil then
-			h.value = v
+		if self._error ~= nil then
+			return false
 		end
-		return ok
+		if not self:_room(bits) then
+			return self:_fail(PAST_END)
+		end
+		if self._kind == "read" then
+			h.value = self:_get(bits)
+		else
+			self:_put(h.value, bits)
+		end
+		return true
 	end
 end
 
