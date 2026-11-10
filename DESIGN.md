@@ -15,7 +15,7 @@ imported.
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
 and `conformance-controls/` (the unknown-operation control and the 18
 `*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.1.3 (`7bf1877b38cfdd737d0bf102a546ec2674335786`, format 2.0, standard 2.1:
+v2.1.4 (`65e43ca1fef11362300f2ca569a7177c2718f20a`, format 2.0, standard 2.1:
 the `rejected` refusal reason, its `reject` vectors and controls, and the
 uniform rules U1 to U16 in IMPLEMENTING.md). CI diffs them against the tag; a
 change arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
