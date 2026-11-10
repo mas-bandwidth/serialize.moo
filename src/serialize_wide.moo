@@ -412,7 +412,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 			end
 			return fromNumber(x, n)
 		end
-		if getmetatable(x) ~= meta then
+		if getmetatable(x :: any) ~= meta then
 			error("serialize: " .. what .. " must be " .. name .. " or an integer-valued number", 3)
 		end
 		return x :: any
@@ -458,7 +458,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	end
 
 	function C.is(x: WideValue): boolean
-		return getmetatable(x) == meta
+		return getmetatable(x :: any) == meta
 	end
 
 	function C.toNumber(x: WideValue): number
