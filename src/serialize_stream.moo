@@ -421,9 +421,6 @@ function Shared.serializeInt(self: any, h: any, min: number, max: number): boole
 	local bits = if diff == 0 then 0 else 32 - bit32.countlz(diff)
 	if self._kind ~= "read" then
 		local v = int32Arg(h.value, "serializeInt", "value")
-		if self._error ~= nil then
-			return false
-		end
 		if v < min or v > max then
 			return self:_fail(RANGE)
 		end
@@ -466,9 +463,6 @@ local function ranged(C: any, name: string)
 		local bits = Wide.bitLen(range, n)
 		if self._kind ~= "read" then
 			local v = wideArg(C, h.value, name, "value")
-			if self._error ~= nil then
-				return false
-			end
 			if Wide.cmpS(v, lo, n) < 0 or Wide.cmpS(v, hi, n) > 0 then
 				return self:_fail(RANGE)
 			end
@@ -572,9 +566,6 @@ local function fixedMethod(C: any, width: number, name: string)
 		local rawMin: { number }, rawRange: { number } = rawMinOrNil, rawRangeOrNil
 		if self._kind ~= "read" then
 			local v = wideArg(C, h.value, name, "value")
-			if self._error ~= nil then
-				return false
-			end
 			local offset = Wide.sub(v, rawMin, width)
 			if Wide.cmpU(offset, rawRange, width) > 0 then
 				return self:_fail(RANGE)
@@ -661,9 +652,6 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 	end
 	if self._kind ~= "read" then
 		local current = int32Arg(h.value, "serializeIntRelative", "value")
-		if self._error ~= nil then
-			return false
-		end
 		if previous >= current then
 			return self:_fail(RANGE)
 		end
@@ -930,9 +918,6 @@ local function compressed(s: any, valueBits: number?, maxIntegerValue: number, b
 		if integerValue > maxIntegerValue then
 			integerValue = maxIntegerValue
 		end
-		if s._error ~= nil then
-			return false, nil
-		end
 		if not s:_room(bits) then
 			return s:_fail(PAST_END), nil
 		end
@@ -1043,9 +1028,6 @@ Shared.serializeCompressedFloatPrecomputedBits = compressedMethod(true, true, "s
 
 function Shared.serializeAlign(self: any): boolean
 	if self._kind == "measure" then
-		if self._error ~= nil then
-			return false
-		end
 		self._bits += 7
 		return true
 	end
@@ -1086,9 +1068,6 @@ function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: 
 	-- a write checks room for the align and the payload together before it
 	-- writes either (U10)
 	if self._kind == "write" then
-		if self._error ~= nil then
-			return false
-		end
 		if not self:_room((8 - self._bits % 8) % 8 + cnt * 8) then
 			return self:_fail(PAST_END)
 		end
@@ -1175,9 +1154,6 @@ function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 		need(type(h.value) == "string", "serializeString", "value", "a string")
 		if string.find(h.value, "\0", 1, true) ~= nil or not validUtf8(h.value) then
 			error(RAISE_STRING_TEXT, 2)
-		end
-		if self._error ~= nil then
-			return false
 		end
 		local s: string = h.value
 		if #s >= bufferSize then
@@ -1339,17 +1315,16 @@ end
 -- ---------------------------------------------------------------------------
 -- The three classes.
 
-local function class(kind: string): any
+local function class(): any
 	local c: any = {}
 	c.__index = c
 	for k, v in Shared do
 		c[k] = v
 	end
-	c._kindName = kind
 	return c
 end
 
-local WriteStream = class("write")
+local WriteStream = class()
 
 -- new(buffer): the buffer's size must be a multiple of 8 bytes.
 function WriteStream.new(buf: buffer): any
@@ -1388,7 +1363,7 @@ function WriteStream.data(self: any): buffer
 	return out
 end
 
-local ReadStream = class("read")
+local ReadStream = class()
 
 function ReadStream.new(data: buffer): any
 	local self = setmetatable({ _kind = "read", _context = nil }, ReadStream)
@@ -1414,7 +1389,7 @@ function ReadStream.reset(self: any, data: buffer)
 	self._error = nil
 end
 
-local MeasureStream = class("measure")
+local MeasureStream = class()
 
 function MeasureStream.new(): any
 	local self = setmetatable({ _kind = "measure", _context = nil }, MeasureStream)
@@ -1477,6 +1452,4 @@ return table.freeze({
 	compressedFloatParams = publicCompressedFloatParams,
 	bitsRequired = bitsRequired,
 	refusalName = refusalName,
-	_compressedFloatParamsBits = compressedFloatParams,
-	_validUtf8 = validUtf8,
 })
