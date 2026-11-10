@@ -333,9 +333,10 @@ local function toDecimal(a: { number }, n: number, signed: boolean): string
 	return (if negative then "-" else "") .. table.concat(parts)
 end
 
--- parse reads optional '-', then decimal digits or 0x and hex digits, modulo
--- 2^(32n). Returns nil on any other text.
-local function parse(text: string, n: number): { number }?
+-- parse reads optional '-', then decimal digits or 0x and hex digits. A decimal
+-- magnitude must fit the signed or unsigned width; hex wraps modulo 2^(32n).
+-- Returns nil on any other text.
+local function parse(text: string, n: number, signed: boolean): { number }?
 	local negative = false
 	local body = text
 	if string.sub(body, 1, 1) == "-" then
@@ -350,7 +351,24 @@ local function parse(text: string, n: number): { number }?
 	if #body == 0 then
 		return nil
 	end
-	local acc = zero(n)
+	local width = if base == 10 then n + 1 else n
+	local acc = zero(width)
+	local bound = zero(width)
+	if base == 10 then
+		if signed then
+			bound[n] = 2147483648
+			if not negative then
+				bound[n] = 2147483647
+				for i = 1, n - 1 do
+					bound[i] = MASK32
+				end
+			end
+		else
+			for i = 1, n do
+				bound[i] = MASK32
+			end
+		end
+	end
 	for i = 1, #body do
 		local c = string.byte(body, i) :: number
 		local d: number
@@ -363,7 +381,17 @@ local function parse(text: string, n: number): { number }?
 		else
 			return nil
 		end
-		acc = mulSmallAdd(acc, base, d, n)
+		acc = mulSmallAdd(acc, base, d, width)
+		if base == 10 and cmpU(acc, bound, width) > 0 then
+			return nil
+		end
+	end
+	if base == 10 then
+		local limbs = table.create(n, 0)
+		for i = 1, n do
+			limbs[i] = acc[i]
+		end
+		acc = limbs
 	end
 	if negative then
 		acc = neg(acc, n)
@@ -444,9 +472,10 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return wrap(fromNumber(x, n))
 	end
 
-	-- parse(text): decimal or 0x hexadecimal, optional '-', modulo the width.
+	-- parse(text): decimal or 0x hexadecimal, optional '-'. Decimal must fit the
+	-- width; hex wraps.
 	function C.parse(text: string): any
-		local limbs = parse(text, n)
+		local limbs = parse(text, n, signed)
 		if limbs == nil then
 			error("serialize: " .. name .. ".parse cannot read " .. string.format("%q", text), 2)
 		end

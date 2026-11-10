@@ -29,6 +29,34 @@ function T.TestParseAndPrint()
 	check(not pcall(Uint64.parse, "12x"), "a bad digit raises")
 end
 
+function T.TestParseBounds()
+	eq(Int64.parse("9223372036854775807"), "9223372036854775807", "Int64 decimal max")
+	eq(Int64.parse("-9223372036854775808"), "-9223372036854775808", "Int64 decimal min")
+	check(not pcall(Int64.parse, "9223372036854775808"), "Int64 decimal above max raises")
+	check(not pcall(Int64.parse, "-9223372036854775809"), "Int64 decimal below min raises")
+	eq(Int64.parse("0xFFFFFFFFFFFFFFFF"), "-1", "Int64 hex max pattern wraps to -1")
+	eq(Int64.parse("0x10000000000000000"), "0", "Int64 hex above the width wraps")
+
+	eq(Uint64.parse("18446744073709551615"), "18446744073709551615", "Uint64 decimal max")
+	check(not pcall(Uint64.parse, "18446744073709551616"), "Uint64 decimal above max raises")
+	check(not pcall(Uint64.parse, "-18446744073709551616"), "Uint64 negative decimal below -max raises")
+	eq(Uint64.parse("0xFFFFFFFFFFFFFFFF"), "18446744073709551615", "Uint64 hex max pattern")
+	eq(Uint64.parse("0x10000000000000000"), "0", "Uint64 hex above the width wraps")
+
+	eq(Int128.parse("170141183460469231731687303715884105727"), "170141183460469231731687303715884105727", "Int128 decimal max")
+	eq(Int128.parse("-170141183460469231731687303715884105728"), "-170141183460469231731687303715884105728", "Int128 decimal min")
+	check(not pcall(Int128.parse, "170141183460469231731687303715884105728"), "Int128 decimal above max raises")
+	check(not pcall(Int128.parse, "-170141183460469231731687303715884105729"), "Int128 decimal below min raises")
+	eq(Int128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"), "-1", "Int128 hex max pattern wraps to -1")
+	eq(Int128.parse("0x100000000000000000000000000000000"), "0", "Int128 hex above the width wraps")
+
+	eq(Uint128.parse("340282366920938463463374607431768211455"), "340282366920938463463374607431768211455", "Uint128 decimal max")
+	check(not pcall(Uint128.parse, "340282366920938463463374607431768211456"), "Uint128 decimal above max raises")
+	check(not pcall(Uint128.parse, "-340282366920938463463374607431768211456"), "Uint128 negative decimal below -max raises")
+	eq(Uint128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"), "340282366920938463463374607431768211455", "Uint128 hex max pattern")
+	eq(Uint128.parse("0x100000000000000000000000000000000"), "0", "Uint128 hex above the width wraps")
+end
+
 function T.TestArithmeticWraps()
 	eq(Int64.parse("9223372036854775807") + 1, "-9223372036854775808", "INT64_MAX + 1 wraps")
 	eq(Uint64.fromNumber(0) - 1, "18446744073709551615", "0 - 1 wraps")
