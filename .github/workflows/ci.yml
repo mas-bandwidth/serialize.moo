@@ -1,7 +1,8 @@
 # serialize.moo CI: the lints, the C oracles, moo-analyze and every test
-# directory on the pinned moo, and the vendored corpus checked against its
-# pin. Every job runs on the fleet's self-hosted runners, never on a
-# GitHub-hosted runner (tools/check-ci.sh refuses one).
+# directory on the pinned moo (checked in the Linux test and fuzz jobs), and
+# the vendored corpus checked against its pin. Every job runs on the fleet's
+# self-hosted runners, never on a GitHub-hosted runner (tools/check-ci.sh
+# refuses one).
 name: ci
 
 on:
@@ -19,37 +20,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: test on the pinned moo
+  # The checked moo is built once, in its own job, and cached on the pin and
+  # its build flags; test and fuzz restore it and run in parallel. A cache hit
+  # builds nothing, so only a change of pin or flags pays for the build.
+  moo-checked:
+    name: build the checked pinned moo
     # The repository is public and these are the fleet's self-hosted runners:
     # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
-    timeout-minutes: 20
+    timeout-minutes: 2
+    outputs:
+      key: ${{ steps.pin.outputs.key }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      # The pin lives once, in the Makefile; the cache key is derived from it.
-      - name: Read the moo pin from the Makefile
+      # The pin and the flags live once, in the Makefile; the cache key is
+      # derived from them.
+      - name: Read the moo pin and checked flags from the Makefile
         id: pin
         run: |
           pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
-          test -n "$pin"
+          flags=$(sed -n 's/^MOO_CHECKED_FLAGS[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin" && test -n "$flags"
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "key=moo-checked-${{ runner.os }}-${{ runner.arch }}-$pin-$(printf '%s' "$flags" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache dist/moo
+      - name: Cache dist/moo-checked
         uses: actions/cache@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: dist/moo-checked
+          key: ${{ steps.pin.outputs.key }}
 
-      # dist-moo refuses a checkout that is not the pin; a cached dist/moo
-      # whose PIN file is the pin is used as it is
-      - name: Build the pinned moo
+      # dist-moo-checked refuses a checkout that is not the pin; a cached
+      # dist/moo-checked whose PIN file is the pin is used as it is
+      - name: Build the checked pinned moo
         run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+          if [ "$(cat dist/moo-checked/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo-checked JOBS=$(nproc); fi
+
+      - name: Check the checked moo refuses overflow
+        run: make check-moo
+
+  test:
+    name: test on the checked pinned moo
+    needs: moo-checked
+    runs-on: [self-hosted, Linux, X64, fleet]
+    timeout-minutes: 2
+    env:
+      MOO: ${{ github.workspace }}/dist/moo-checked/moo
+      MOO_ANALYZE: ${{ github.workspace }}/dist/moo-checked/moo-analyze
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Restore dist/moo-checked
+        uses: actions/cache/restore@v4
+        with:
+          path: dist/moo-checked
+          key: ${{ needs.moo-checked.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Check the checked moo refuses overflow
+        run: make check-moo
 
       - uses: actions/setup-go@v5
         with:
@@ -60,34 +95,27 @@ jobs:
         run: make test
 
   fuzz:
-    name: differential fuzz against serialize.go, and its negative control
-    # The repository is public and these are the fleet's self-hosted runners:
-    # a pull request from a fork never runs on them.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: differential fuzz against serialize.go on the checked moo, and its negative control
+    needs: moo-checked
     runs-on: [self-hosted, Linux, X64, fleet]
-    timeout-minutes: 15
+    timeout-minutes: 2
+    env:
+      MOO: ${{ github.workspace }}/dist/moo-checked/moo
+      MOO_ANALYZE: ${{ github.workspace }}/dist/moo-checked/moo-analyze
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      # The pin lives once, in the Makefile; the cache key is derived from it.
-      - name: Read the moo pin from the Makefile
-        id: pin
-        run: |
-          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
-          test -n "$pin"
-          echo "pin=$pin" >> "$GITHUB_OUTPUT"
-
-      - name: Cache dist/moo
-        uses: actions/cache@v4
+      - name: Restore dist/moo-checked
+        uses: actions/cache/restore@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: dist/moo-checked
+          key: ${{ needs.moo-checked.outputs.key }}
+          fail-on-cache-miss: true
 
-      - name: Build the pinned moo
-        run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+      - name: Check the checked moo refuses overflow
+        run: make check-moo
 
       - uses: actions/setup-go@v5
         with:
