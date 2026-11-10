@@ -24,6 +24,7 @@ MOO        ?= $(MOO_DIST)/moo
 MOO_ANALYZE ?= $(MOO_DIST)/moo-analyze
 MOO_CHECKED_DIST := $(CURDIR)/dist/moo-checked
 MOO_CHECKED ?= $(MOO_CHECKED_DIST)/moo
+MOO_CHECKED_FLAGS := -DCMAKE_BUILD_TYPE=Release -DMOO_OVERFLOW_ERRORS=ON
 export MOO
 
 CC  ?= cc
@@ -60,11 +61,11 @@ dist-moo-checked:
 	@cd build/moo-src-checked && git init -q && git fetch -q --depth 1 $(MOO_REPO) $(MOO_PIN) && git checkout -q FETCH_HEAD
 	@got=$$(git -C build/moo-src-checked rev-parse HEAD); if [ "$$got" != "$(MOO_PIN)" ]; then \
 		echo "dist-moo-checked REFUSES: the checkout is $$got, not the pin $(MOO_PIN)"; exit 1; fi
-	@cmake -S build/moo-src-checked -B build/moo-build-checked -DCMAKE_BUILD_TYPE=Release -DMOO_OVERFLOW_ERRORS=ON >/dev/null
+	@cmake -S build/moo-src-checked -B build/moo-build-checked $(MOO_CHECKED_FLAGS) >/dev/null
 	@cmake --build build/moo-build-checked --target Luau.Repl.CLI Luau.Analyze.CLI -j $(JOBS) >/dev/null
 	@cp build/moo-build-checked/moo build/moo-build-checked/moo-analyze $(MOO_CHECKED_DIST)/
 	@echo $(MOO_PIN) > $(MOO_CHECKED_DIST)/PIN
-	@echo "dist-moo-checked: moo $(MOO_PIN) at $(MOO_CHECKED_DIST) (-DMOO_OVERFLOW_ERRORS=ON)"
+	@echo "dist-moo-checked: moo $(MOO_PIN) at $(MOO_CHECKED_DIST) ($(MOO_CHECKED_FLAGS))"
 
 # check-moo: the negative control for dist-moo-checked. The largest exact
 # integer is 2^47 - 1; 2^47 must raise number overflow on the checked binary,
