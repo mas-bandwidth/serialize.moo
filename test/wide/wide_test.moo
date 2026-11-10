@@ -147,4 +147,33 @@ function T.TestBitwise()
 	eq(Int128.bor(Int128.lsh(1, 96), Int128.lsh(1, 32)), "79228162514264337597838917632", "int128 bor joins limbs 1 and 3")
 end
 
+function T.TestFrozenWideClasses()
+	local classes = {
+		{ serialize.Int64, serialize.Int64.fromNumber(0) },
+		{ serialize.Uint64, serialize.Uint64.fromNumber(0) },
+		{ serialize.Int128, serialize.Int128.fromNumber(0) },
+		{ serialize.Uint128, serialize.Uint128.fromNumber(0) },
+	}
+	for _, c in classes do
+		local class, value = c[1], c[2]
+		check(not pcall(function()
+			class.is = class.is
+		end), class.name .. " class table is frozen")
+		local meta = getmetatable(value)
+		check(not pcall(function()
+			meta.__eq = meta.__eq
+		end), class.name .. " value metatable is frozen")
+		check(not pcall(setmetatable, value, {}), class.name .. " value metatable is protected")
+	end
+	local f = serialize.Float32.fromNumber(0)
+	check(not pcall(function()
+		serialize.Float32.is = serialize.Float32.is
+	end), "Float32 class table is frozen")
+	local meta = getmetatable(f)
+	check(not pcall(function()
+		meta.__eq = meta.__eq
+	end), "Float32 value metatable is frozen")
+	check(not pcall(setmetatable, f, {}), "Float32 value metatable is protected")
+end
+
 return T
