@@ -93,7 +93,6 @@ F.fromDoubleBits = fromDoubleBits
 
 local QNAN = 0x7FC00000
 local PINF = 0x7F800000
-local NINF = 0xFF800000
 
 local function isNaN(b: number): boolean
 	return b % TWO31 > PINF
@@ -374,7 +373,6 @@ local function le(a: number, b: number): boolean
 end
 
 F.isNaN = isNaN
-F.isInf = isInf
 F.isFinite = isFinite
 F.fadd = fadd
 F._unpack = unpack -- the white-box tests (test/softfloat) only
@@ -389,7 +387,6 @@ F.lt = lt
 F.le = le
 F.QNAN = QNAN
 F.PINF = PINF
-F.NINF = NINF
 
 -- ---------------------------------------------------------------------------
 -- The decimal reader: a decimal literal rounded once to binary32, as strtof.

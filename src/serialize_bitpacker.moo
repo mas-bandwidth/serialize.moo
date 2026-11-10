@@ -277,6 +277,5 @@ end
 return table.freeze({
 	BitWriter = table.freeze(BitWriter),
 	BitReader = table.freeze(BitReader),
-	POW2 = POW2,
 	MASK = MASK,
 })
