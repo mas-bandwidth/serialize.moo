@@ -176,4 +176,31 @@ function T.TestFrozenWideClasses()
 	check(not pcall(setmetatable, f, {}), "Float32 value metatable is protected")
 end
 
+-- eq compares a wide value with a wide value, and a wide value with a number.
+function T.TestEq()
+	check(Int64.eq(Int64.parse("-9223372036854775808"), Int64.parse("-9223372036854775808")), "int64 wide equals wide")
+	check(not Int64.eq(Int64.parse("-9223372036854775808"), Int64.fromNumber(0)), "int64 wide differs from wide")
+	check(Int64.eq(Int64.fromNumber(-1), -1), "int64 wide equals a number")
+	check(Int64.eq(-1, Int64.fromNumber(-1)), "int64 number equals wide")
+	check(not Int64.eq(Int64.fromNumber(-1), 0), "int64 wide differs from a number")
+
+	check(Uint64.eq(Uint64.parse("18446744073709551615"), Uint64.parse("0xFFFFFFFFFFFFFFFF")), "uint64 wide equals wide")
+	check(not Uint64.eq(Uint64.parse("18446744073709551615"), Uint64.fromNumber(0)), "uint64 wide differs from wide")
+	check(Uint64.eq(Uint64.fromNumber(0), 0), "uint64 wide equals a number")
+	check(Uint64.eq(0, Uint64.fromNumber(0)), "uint64 number equals wide")
+	check(not Uint64.eq(Uint64.fromNumber(1), 0), "uint64 wide differs from a number")
+
+	check(Int128.eq(Int128.parse("-170141183460469231731687303715884105728"), Int128.parse("-170141183460469231731687303715884105728")), "int128 wide equals wide")
+	check(not Int128.eq(Int128.parse("-170141183460469231731687303715884105728"), Int128.fromNumber(0)), "int128 wide differs from wide")
+	check(Int128.eq(Int128.fromNumber(5), 5), "int128 wide equals a number")
+	check(Int128.eq(5, Int128.fromNumber(5)), "int128 number equals wide")
+	check(not Int128.eq(Int128.fromNumber(5), 6), "int128 wide differs from a number")
+
+	check(Uint128.eq(Uint128.parse("340282366920938463463374607431768211455"), Uint128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")), "uint128 wide equals wide")
+	check(not Uint128.eq(Uint128.parse("340282366920938463463374607431768211455"), Uint128.fromNumber(0)), "uint128 wide differs from wide")
+	check(Uint128.eq(Uint128.fromNumber(7), 7), "uint128 wide equals a number")
+	check(Uint128.eq(7, Uint128.fromNumber(7)), "uint128 number equals wide")
+	check(not Uint128.eq(Uint128.fromNumber(7), 8), "uint128 wide differs from a number")
+end
+
 return T

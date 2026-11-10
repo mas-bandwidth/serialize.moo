@@ -84,8 +84,20 @@ function T.TestSoftfloatAgainstTheCOracle()
 			error("softfloat oracle line with no check: " .. op)
 		end
 	end
-	for _, op in { "add", "sub", "mul", "div", "u2f", "flr", "cil", "dec" } do
-		check((counts[op] or 0) > 0, "the oracle has no " .. op .. " cases")
+	local floors: { { any } } = {
+		{ "add", 6000 },
+		{ "sub", 6000 },
+		{ "mul", 6000 },
+		{ "div", 6000 },
+		{ "u2f", 2015 },
+		{ "flr", 2000 },
+		{ "cil", 2000 },
+		{ "dec", 2031 },
+	}
+	for _, f in floors do
+		local op: string, floor: number = f[1], f[2]
+		local n = counts[op] or 0
+		check(n >= floor, "the oracle has " .. n .. " " .. op .. " cases, want at least " .. floor)
 	end
 	check(bad == 0, bad .. " softfloat cases differ from the C oracle; first: " .. tostring(firstBad))
 end

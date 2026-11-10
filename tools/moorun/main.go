@@ -333,6 +333,10 @@ func runUnit(root, moo, name string, c *control, stdout, stderr io.Writer) bool 
 		fmt.Fprintf(stdout, "FAIL %s is empty: no *_test.moo files\n", label)
 		return false
 	}
+	if err := checkReadmeExample(root, tests); err != nil {
+		fmt.Fprintf(stdout, "FAIL %s: %v\n", label, err)
+		return false
+	}
 	runName := name
 	if c != nil {
 		label = "test/" + name + "/ control " + c.rule
@@ -446,6 +450,109 @@ func copyFile(from, to string) error {
 		return err
 	}
 	return os.WriteFile(to, b, 0o644)
+}
+
+// readmeExampleBegin and readmeExampleEnd bracket the lines of a test file
+// that are checked against README.md's fenced example.
+const (
+	readmeExampleBegin = "-- README.md example begin"
+	readmeExampleEnd   = "-- README.md example end"
+)
+
+// checkReadmeExample requires a marked block in a test file to be the lines of
+// README.md's first ```lua block, line for line.
+func checkReadmeExample(root string, tests []string) error {
+	for _, t := range tests {
+		source, err := os.ReadFile(t)
+		if err != nil {
+			return err
+		}
+		got, err := markedBlock(string(source))
+		if err != nil {
+			return fmt.Errorf("%s: %v", filepath.Base(t), err)
+		}
+		if got == nil {
+			continue
+		}
+		want, err := readmeFencedExample(root)
+		if err != nil {
+			return err
+		}
+		if !sameBlock(got, want) {
+			return fmt.Errorf("%s's README.md example differs from README.md's ```lua block", filepath.Base(t))
+		}
+	}
+	return nil
+}
+
+// readmeFencedExample returns the lines of README.md's first ```lua block.
+func readmeFencedExample(root string) ([]string, error) {
+	text, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		return nil, err
+	}
+	return fencedBlock(string(text), "lua")
+}
+
+func fencedBlock(text, language string) ([]string, error) {
+	open := "```" + language
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != open {
+			continue
+		}
+		var block []string
+		for _, l := range lines[i+1:] {
+			if strings.TrimSpace(l) == "```" {
+				return block, nil
+			}
+			block = append(block, l)
+		}
+		return nil, fmt.Errorf("the %s block does not close", open)
+	}
+	return nil, fmt.Errorf("no %s block", open)
+}
+
+// markedBlock returns the lines between readmeExampleBegin and
+// readmeExampleEnd, or nil when the file holds no marked block.
+func markedBlock(text string) ([]string, error) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	var block []string
+	found := false
+	for _, line := range lines {
+		switch strings.TrimSpace(line) {
+		case readmeExampleBegin:
+			if found {
+				return nil, fmt.Errorf("%s occurs twice", readmeExampleBegin)
+			}
+			found = true
+		case readmeExampleEnd:
+			if !found {
+				return nil, fmt.Errorf("%s before %s", readmeExampleEnd, readmeExampleBegin)
+			}
+			return block, nil
+		default:
+			if found {
+				block = append(block, line)
+			}
+		}
+	}
+	if found {
+		return nil, fmt.Errorf("%s does not close", readmeExampleBegin)
+	}
+	return nil, nil
+}
+
+func sameBlock(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if strings.TrimSpace(got[i]) != strings.TrimSpace(want[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 type input struct {
