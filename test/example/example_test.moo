@@ -4,6 +4,7 @@
 local T = {}
 
 function T.TestReadmeExample()
+	-- README.md example begin
 	local serialize = require("./serialize")
 
 	local w = serialize.WriteStream.new(buffer.create(64))
@@ -23,6 +24,7 @@ function T.TestReadmeExample()
 
 	local bad = serialize.ReadStream.new(buffer.fromstring("\xFF"))
 	assert(not bad:serializeInt(n, 0, 100) and bad:error() == serialize.Refusal.ValueOutOfRange)
+	-- README.md example end
 end
 
 return T

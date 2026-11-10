@@ -144,6 +144,15 @@ local function needDecl(s: any, cond: boolean, method: string, name: string, kin
 	return true
 end
 
+-- holderArg: a read's holder must be a mutable table, checked before any bit
+-- moves (U7); a write or a measure checks the value it is handed itself.
+local function holderArg(s: any, h: any): boolean
+	if s._kind == "read" and (type(h) ~= "table" or table.isfrozen(h)) then
+		return misuse(s, "serialize: the holder must be a mutable table", 3)
+	end
+	return true
+end
+
 -- wideDecl: wideArg, for a declaration: the limbs, or nil after misuse.
 local function wideDecl(s: any, C: any, x: any, method: string, name: string): { number }?
 	local ok = if type(x) == "number" then x == math.floor(x) and (C.signed or x >= 0) else C.is(x)
@@ -312,6 +321,9 @@ function Shared.serializeBits(self: any, h: any, bits: number): boolean
 		-- measure checks what a write checks (U6)
 		uintArg(h.value, bits, "serializeBits", "value")
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	local ok, v = fixedWidth(self, bits, function()
 		return bit32.band(h.value, MASK[bits])
 	end)
@@ -331,6 +343,9 @@ function Shared.serializeBits64(self: any, h: any, bits: number): boolean
 		-- the value must fit its width: masking is not checking (U8)
 		need(Wide.bitLen(limbs, 2) <= bits, "serializeBits64", "value", "a uint" .. bits)
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -349,6 +364,9 @@ function Shared.serializeBool(self: any, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "boolean", "serializeBool", "value", "a boolean")
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	local ok, v = fixedWidth(self, 1, function()
 		return if h.value then 1 else 0
 	end)
@@ -362,6 +380,9 @@ local function uintMethod(bits: number, name: string)
 	return function(self: any, h: any): boolean
 		if self._kind ~= "read" then
 			uintArg(h.value, bits, name, "value")
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		local ok, v = fixedWidth(self, bits, function()
 			return h.value
@@ -383,6 +404,9 @@ local function wideFixed(C: any, bits: number, name: string)
 		local limbs: { number }
 		if self._kind ~= "read" then
 			limbs = wideArg(C, h.value, name, "value")
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		if self._error ~= nil then
 			return false
@@ -430,6 +454,9 @@ function Shared.serializeInt(self: any, h: any, min: number, max: number): boole
 		self:_put(v - min, bits)
 		return true
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -471,6 +498,9 @@ local function ranged(C: any, name: string)
 			end
 			self:_putWide(Wide.sub(v, lo, n), bits)
 			return true
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		if self._error ~= nil then
 			return false
@@ -576,6 +606,9 @@ local function fixedMethod(C: any, width: number, name: string)
 			self:_putWide(offset, bits)
 			return true
 		end
+		if not holderArg(self, h) then
+			return false
+		end
 		if self._error ~= nil then
 			return false
 		end
@@ -610,6 +643,9 @@ function Shared.serializeFixedNumber(self: any, h: any, min: any, max: any): boo
 	end
 	if Wide.cmpS(maxLimbs, MAX_NUMBER_UNITS, 2) > 0 then
 		return misuse(self, "serialize: serializeFixedNumber max must be at most 2^47 - 1 whole units, the largest moo integer", 2)
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	local raw: any = nil
 	if self._kind ~= "read" then
@@ -689,6 +725,9 @@ function Shared.serializeIntRelative(self: any, previous: number, h: any): boole
 		end
 		return self:serializeBits({ value = current }, 32)
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -767,6 +806,9 @@ function Shared.serializeFloatBits(self: any, h: any): boolean
 	if self._kind ~= "read" then
 		uintArg(h.value, 32, "serializeFloatBits", "value")
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -792,6 +834,9 @@ function Shared.serializeDoubleBits(self: any, h: any): boolean
 	local limbs: { number }
 	if self._kind ~= "read" then
 		limbs = wideArg(Uint64, h.value, "serializeDoubleBits", "value")
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	if self._error ~= nil then
 		return false
@@ -819,6 +864,9 @@ function Shared.serializeFloat(self: any, h: any): boolean
 		need(type(h.value) == "number", "serializeFloat", "value", "a number")
 		return Shared.serializeFloatBits(self, { value = Float.toFloatBits(h.value) })
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	local bits = { value = 0 }
 	if not Shared.serializeFloatBits(self, bits) then
 		return false
@@ -836,6 +884,9 @@ function Shared.serializeDouble(self: any, h: any): boolean
 		need(type(h.value) == "number", "serializeDouble", "value", "a number")
 		local lo, hi = Float.toDoubleBits(h.value)
 		return Shared.serializeDoubleBits(self, { value = Uint64._wrap({ lo, hi }) })
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	local bits: any = { value = nil }
 	if not Shared.serializeDoubleBits(self, bits) then
@@ -999,6 +1050,9 @@ local function compressedMethod(asBits: boolean, precomputed: boolean, name: str
 				error(RAISE_DECLARATION_FINITE, 2)
 			end
 			maxIntegerValue = m
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		local valueBits = compressedValue(self, h, asBits, name)
 		local ok, decoded = compressed(self, valueBits, maxIntegerValue, bits, delta, min)
@@ -1183,6 +1237,9 @@ function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
 		end
 		self._bits += #s * 8
 		return true
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	if self._error ~= nil then
 		return false

@@ -592,6 +592,13 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return bitLen(limbsOf(x, name .. ".len"), n)
 	end
 
+	-- eq converts a number operand, then compares the wide values.
+	function C.eq(x: any, y: any): boolean
+		local a, b = limbsOf(x, name .. ".eq"), limbsOf(y, name .. ".eq")
+		local ord = if signed then cmpS(a, b, n) else cmpU(a, b, n)
+		return ord == 0
+	end
+
 	meta.__eq = function(x: any, y: any): boolean
 		if getmetatable(x) ~= getmetatable(y) then
 			return false
