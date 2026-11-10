@@ -114,9 +114,10 @@ function T.TestBoundaryWitnesses()
 	-- NaN, infinity and 2^47 are refused, not clamped or zeroed: the first
 	-- three by the format, 2^47 by the boundary
 	for _, case in { { 0x7FC00000, "non_finite_float" }, { 0x7F800000, "non_finite_float" }, { 0xFF800000, "non_finite_float" }, { 0x57000000, "value_out_of_range" } } do
+		local bits, want = case[1] :: number, case[2] :: string
 		local err
-		ok, v, err = readFloat(le32(case[1]), false)
-		check(not ok and v == 777 and err == case[2], string.format("0x%08X must be refused as %s, got %s", case[1], case[2], tostring(err)))
+		ok, v, err = readFloat(le32(bits), false)
+		check(not ok and v == 777 and err == want, string.format("0x%08X must be refused as %s, got %s", bits, want, tostring(err)))
 	end
 	-- 1/3 as a number writes the float nearest it, not the float of 1/3
 	local third = 1 / 3 -- 21845 units

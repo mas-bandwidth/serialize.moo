@@ -25,6 +25,10 @@ local MASK32 = 4294967295
 local TWO16 = 65536
 local MAX_EXACT = 140737488355327 -- 2^47 - 1, the largest integer a moo number holds exactly
 
+-- A wide value is its class's limb array, or an integer-valued moo number the
+-- class converts (a negative number does not fit an unsigned class).
+export type WideValue = number | { number }
+
 local W = {}
 
 -- ---------------------------------------------------------------------------
@@ -36,7 +40,7 @@ local function zero(n: number): { number }
 	return r
 end
 
-local function isLimb(x: any): boolean
+local function isLimb(x: number): boolean
 	return type(x) == "number" and x >= 0 and x <= MASK32 and x == math.floor(x)
 end
 
@@ -429,17 +433,17 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return table.freeze(setmetatable(limbs, meta))
 	end
 
-	local function limbsOf(x: any, what: string): { number }
+	local function limbsOf(x: WideValue, what: string): { number }
 		if type(x) == "number" then
 			if x ~= math.floor(x) then
 				error("serialize: " .. what .. " must be " .. name .. " or an integer-valued number", 3)
 			end
 			return fromNumber(x, n)
 		end
-		if getmetatable(x) ~= meta then
+		if getmetatable(x :: any) ~= meta then
 			error("serialize: " .. what .. " must be " .. name .. " or an integer-valued number", 3)
 		end
-		return x
+		return x :: any
 	end
 
 	C.name = name
@@ -449,7 +453,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	C._limbsOf = limbsOf
 
 	-- new(l1, ..., ln): the limbs, least significant first, each in [0, 2^32).
-	function C.new(...: number): any
+	function C.new(...: number): WideValue
 		local args = { ... }
 		if #args ~= n then
 			error("serialize: " .. name .. ".new takes " .. n .. " limbs, least significant first", 2)
@@ -465,7 +469,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 	end
 
 	-- fromNumber(x): an integer-valued moo number, two's complement for negatives.
-	function C.fromNumber(x: number): any
+	function C.fromNumber(x: number): WideValue
 		if type(x) ~= "number" or x ~= math.floor(x) then
 			error("serialize: " .. name .. ".fromNumber requires an integer-valued number", 2)
 		end
@@ -474,7 +478,7 @@ local function makeClass(name: string, n: number, signed: boolean): any
 
 	-- parse(text): decimal or 0x hexadecimal, optional '-'. Decimal must fit the
 	-- width; hex wraps.
-	function C.parse(text: string): any
+	function C.parse(text: string): WideValue
 		local limbs = parse(text, n, signed)
 		if limbs == nil then
 			error("serialize: " .. name .. ".parse cannot read " .. string.format("%q", text), 2)
@@ -482,53 +486,54 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return wrap(limbs)
 	end
 
-	function C.is(x: any): boolean
-		return getmetatable(x) == meta
+	function C.is(x: WideValue): boolean
+		return getmetatable(x :: any) == meta
 	end
 
-	function C.toNumber(x: any): number
-		local v = toNumber(limbsOf(x, name .. ".toNumber"), n, signed)
+	function C.toNumber(x: WideValue): number
+		local a = limbsOf(x, name .. ".toNumber")
+		local v = toNumber(a, n, signed)
 		if v == nil then
-			error("serialize: " .. name .. " " .. toDecimal(x, n, signed) .. " is not an integer moo can hold exactly (|x| <= 2^47 - 1)", 2)
+			error("serialize: " .. name .. " " .. toDecimal(a, n, signed) .. " is not an integer moo can hold exactly (|x| <= 2^47 - 1)", 2)
 		end
 		return v
 	end
 
 	-- tryNumber(x) is toNumber without the raise: nil when it does not fit.
-	function C.tryNumber(x: any): number?
+	function C.tryNumber(x: WideValue): number?
 		return toNumber(limbsOf(x, name .. ".tryNumber"), n, signed)
 	end
 
-	function C.toString(x: any): string
+	function C.toString(x: WideValue): string
 		return toDecimal(limbsOf(x, name .. ".toString"), n, signed)
 	end
 
-	function C.isZero(x: any): boolean
+	function C.isZero(x: WideValue): boolean
 		return isZero(limbsOf(x, name .. ".isZero"), n)
 	end
 
-	function C.isNegative(x: any): boolean
+	function C.isNegative(x: WideValue): boolean
 		return signed and isNegative(limbsOf(x, name .. ".isNegative"), n)
 	end
 
-	function C.cmp(x: any, y: any): number
+	function C.cmp(x: WideValue, y: WideValue): number
 		local a, b = limbsOf(x, name .. ".cmp"), limbsOf(y, name .. ".cmp")
 		return if signed then cmpS(a, b, n) else cmpU(a, b, n)
 	end
 
-	function C.add(x: any, y: any): any
+	function C.add(x: WideValue, y: WideValue): WideValue
 		return wrap(add(limbsOf(x, name .. ".add"), limbsOf(y, name .. ".add"), n))
 	end
 
-	function C.sub(x: any, y: any): any
+	function C.sub(x: WideValue, y: WideValue): WideValue
 		return wrap(sub(limbsOf(x, name .. ".sub"), limbsOf(y, name .. ".sub"), n))
 	end
 
-	function C.mul(x: any, y: any): any
+	function C.mul(x: WideValue, y: WideValue): WideValue
 		return wrap(mul(limbsOf(x, name .. ".mul"), limbsOf(y, name .. ".mul"), n))
 	end
 
-	function C.divMod(x: any, y: any): (any, any)
+	function C.divMod(x: WideValue, y: WideValue): (WideValue, WideValue)
 		local a, b = limbsOf(x, name .. ".divMod"), limbsOf(y, name .. ".divMod")
 		local q, r
 		if signed then
@@ -539,33 +544,33 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return wrap(q), wrap(r)
 	end
 
-	function C.div(x: any, y: any): any
+	function C.div(x: WideValue, y: WideValue): WideValue
 		local q, _ = C.divMod(x, y)
 		return q
 	end
 
-	function C.mod(x: any, y: any): any
+	function C.mod(x: WideValue, y: WideValue): WideValue
 		local _, r = C.divMod(x, y)
 		return r
 	end
 
-	function C.neg(x: any): any
+	function C.neg(x: WideValue): WideValue
 		return wrap(neg(limbsOf(x, name .. ".neg"), n))
 	end
 
-	function C.bnot(x: any): any
+	function C.bnot(x: WideValue): WideValue
 		return wrap(bnot(limbsOf(x, name .. ".bnot"), n))
 	end
 
-	function C.band(x: any, y: any): any
+	function C.band(x: WideValue, y: WideValue): WideValue
 		return wrap(bitwise(limbsOf(x, name .. ".band"), limbsOf(y, name .. ".band"), n, bit32.band))
 	end
 
-	function C.bor(x: any, y: any): any
+	function C.bor(x: WideValue, y: WideValue): WideValue
 		return wrap(bitwise(limbsOf(x, name .. ".bor"), limbsOf(y, name .. ".bor"), n, bit32.bor))
 	end
 
-	function C.bxor(x: any, y: any): any
+	function C.bxor(x: WideValue, y: WideValue): WideValue
 		return wrap(bitwise(limbsOf(x, name .. ".bxor"), limbsOf(y, name .. ".bxor"), n, bit32.bxor))
 	end
 
@@ -576,24 +581,24 @@ local function makeClass(name: string, n: number, signed: boolean): any
 		return k
 	end
 
-	function C.lsh(x: any, k: number): any
+	function C.lsh(x: WideValue, k: number): WideValue
 		return wrap(shl(limbsOf(x, name .. ".lsh"), shiftCount(k, "lsh"), n))
 	end
 
 	-- rsh is arithmetic for the signed classes and logical for the unsigned.
-	function C.rsh(x: any, k: number): any
+	function C.rsh(x: WideValue, k: number): WideValue
 		local a = limbsOf(x, name .. ".rsh")
 		local fill = if signed and isNegative(a, n) then MASK32 else 0
 		return wrap(shr(a, shiftCount(k, "rsh"), n, fill))
 	end
 
 	-- len is the bit length of the bit pattern read unsigned (Go's Uint128.Len).
-	function C.len(x: any): number
+	function C.len(x: WideValue): number
 		return bitLen(limbsOf(x, name .. ".len"), n)
 	end
 
 	-- eq converts a number operand, then compares the wide values.
-	function C.eq(x: any, y: any): boolean
+	function C.eq(x: WideValue, y: WideValue): boolean
 		local a, b = limbsOf(x, name .. ".eq"), limbsOf(y, name .. ".eq")
 		local ord = if signed then cmpS(a, b, n) else cmpU(a, b, n)
 		return ord == 0
@@ -629,7 +634,7 @@ W.Int128 = makeClass("Int128", 4, true)
 -- Reinterpretations between the classes of one width, and widening /
 -- narrowing between the widths (serialize.go's Int128From64, Uint128From64,
 -- Int128.Int64, Uint128.Uint64, Int128.Uint128, Uint128.Int128).
-local function reinterpret(to: any, x: any, from: any): any
+local function reinterpret(to: any, x: WideValue, from: any): WideValue
 	local a: { number } = from._limbsOf(x, to.name)
 	local limbs = table.create(#a, 0)
 	for i = 1, #a do
@@ -638,36 +643,36 @@ local function reinterpret(to: any, x: any, from: any): any
 	return to._wrap(limbs)
 end
 
-function W.Int64.toUint64(x: any): any
+function W.Int64.toUint64(x: WideValue): WideValue
 	return reinterpret(W.Uint64, x, W.Int64)
 end
-function W.Uint64.toInt64(x: any): any
+function W.Uint64.toInt64(x: WideValue): WideValue
 	return reinterpret(W.Int64, x, W.Uint64)
 end
-function W.Int128.toUint128(x: any): any
+function W.Int128.toUint128(x: WideValue): WideValue
 	return reinterpret(W.Uint128, x, W.Int128)
 end
-function W.Uint128.toInt128(x: any): any
+function W.Uint128.toInt128(x: WideValue): WideValue
 	return reinterpret(W.Int128, x, W.Uint128)
 end
 
 -- Int128.from64(x): sign-extends an Int64 (or number); Uint128.from64(x):
 -- zero-extends a Uint64 (or number).
-function W.Int128.from64(x: any): any
+function W.Int128.from64(x: WideValue): WideValue
 	local a = W.Int64._limbsOf(x, "Int128.from64 value")
 	local fill = if isNegative(a, 2) then MASK32 else 0
 	return W.Int128._wrap({ a[1], a[2], fill, fill })
 end
-function W.Uint128.from64(x: any): any
+function W.Uint128.from64(x: WideValue): WideValue
 	local a = W.Uint64._limbsOf(x, "Uint128.from64 value")
 	return W.Uint128._wrap({ a[1], a[2], 0, 0 })
 end
 -- toInt64 / toUint64 truncate to the low 64 bits, like a native narrowing.
-function W.Int128.toInt64(x: any): any
+function W.Int128.toInt64(x: WideValue): WideValue
 	local a = W.Int128._limbsOf(x, "Int128.toInt64 value")
 	return W.Int64._wrap({ a[1], a[2] })
 end
-function W.Uint128.toUint64(x: any): any
+function W.Uint128.toUint64(x: WideValue): WideValue
 	local a = W.Uint128._limbsOf(x, "Uint128.toUint64 value")
 	return W.Uint64._wrap({ a[1], a[2] })
 end
@@ -675,7 +680,7 @@ end
 -- fromNumberRaw / toNumberRaw: a moo number and its own Q48.16 raw bits as an
 -- Int64 (value * 2^16, exact). toNumberRaw refuses the one raw value moo has
 -- no number for, -2^63 (moo's range is [-(2^63 - 1), 2^63 - 1] raw), with nil.
-function W.Int64.fromNumberRaw(x: number): any
+function W.Int64.fromNumberRaw(x: number): WideValue
 	if type(x) ~= "number" then
 		error("serialize: Int64.fromNumberRaw requires a number", 2)
 	end
@@ -691,7 +696,7 @@ function W.Int64.fromNumberRaw(x: number): any
 	return W.Int64._wrap(limbs)
 end
 
-function W.Int64.toNumberRaw(x: any): number?
+function W.Int64.toNumberRaw(x: WideValue): number?
 	local a = W.Int64._limbsOf(x, "Int64.toNumberRaw value")
 	if a[2] == 2147483648 and a[1] == 0 then
 		return nil

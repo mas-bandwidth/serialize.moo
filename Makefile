@@ -5,7 +5,8 @@
 # gitignored. The pin is the commit; dist-moo REFUSES a checkout whose HEAD is
 # not it.
 #
-# make test           the lints, the oracles, moo-analyze over src/, then every test/*/
+# make test           the lints, the oracles, moo-analyze over src/ and every test unit,
+#                     then every test/*/
 # make test T=<name>  the same, then test/<name>/ only
 #                     (both run moorun-unit, the runner's own unit tests, first)
 # make oracles        build/oracle/*.txt from oracle/*.c (the C compiler's IEEE arithmetic)
@@ -100,6 +101,20 @@ lint:
 
 analyze: toolchain
 	@$(MOO_ANALYZE) src/*.moo
+	@rm -rf build/analyze && mkdir -p build/analyze
+	@for dir in test/*/; do \
+		name=$$(basename "$$dir"); \
+		unit=build/analyze/$$name/src; \
+		mkdir -p "$$unit"; \
+		cp src/*.moo "$$unit/"; \
+		cp "$$dir"*.moo "$$unit/" 2>/dev/null || true; \
+		cp "$$dir"plant/* "build/analyze/$$name/" 2>/dev/null || true; \
+		printf -- '--!strict\nreturn table.freeze({})\n' > "$$unit/inputs.moo"; \
+		for test in "$$unit"/*_test.moo; do \
+			[ -e "$$test" ] || continue; \
+			$(MOO_ANALYZE) "$$test" || exit 1; \
+		done; \
+	done
 
 build/oracle/%: oracle/%_oracle.c oracle/oracle_common.h
 	@mkdir -p build/oracle
