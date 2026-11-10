@@ -19,7 +19,7 @@ function T.TestEntryLoadsItsOwnModules()
 	check(serialize.VERSION == "2.1.2", "port version 2.1.2")
 	check(table.isfrozen(serialize), "the API table is frozen")
 	local changed = pcall(function()
-		serialize.VERSION = "changed"
+		(serialize :: any).VERSION = "changed"
 	end)
 	check(not changed and serialize.VERSION == "2.1.2", "the port version is frozen")
 	local w = serialize.WriteStream.new(buffer.create(8))

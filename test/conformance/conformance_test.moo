@@ -36,7 +36,7 @@ local Refusal = serialize.Refusal
 
 -- the closed list (STANDARD.md, Refusal reasons), by its spelling
 local REASONS: { [string]: boolean } = {}
-for _, reason in Refusal do
+for _, reason in Refusal :: { [string]: string } do
 	REASONS[reason] = true
 end
 
@@ -82,7 +82,7 @@ local function countOps(text: string): number
 end
 
 local function parseVectors(text: string): { any }
-	local records = {}
+	local records: { any } = {}
 	local cur: any = nil
 	local function flush()
 		if cur ~= nil then
@@ -781,7 +781,7 @@ local function runSteps(s: any, steps: { { string } }, outcomes: { any }?, poiso
 						if sub[1] == "reject" then
 							check(#sub == 1, "the reject step takes no parameters")
 							if outcomes ~= nil then
-								table.insert(outcomes, { op = "reject", value = nil, st = sub })
+								table.insert(outcomes :: { any }, { op = "reject", value = nil, st = sub })
 							end
 							return false
 						end
@@ -883,6 +883,7 @@ local function runRecord(rec: any)
 		if rec.file == "object" and rec.expect.refused then
 			checkCallbackRefusal(rec)
 		end
+		return nil
 	end, function(e: any): any
 		return tostring(e) .. "\n" .. debug.traceback()
 	end)
@@ -979,7 +980,7 @@ if inputs.CONTROL ~= nil then
 		check(#problems == 0, "control " .. rule .. " does not fail exactly its .expected list:\n" .. table.concat(problems, "\n"))
 		print(string.format("  control %s: exactly the %d expected vectors of %d failed", rule, nFailed, #records))
 	end
-	return C
+	return C :: any
 end
 
 function T.TestConformanceCorpus()

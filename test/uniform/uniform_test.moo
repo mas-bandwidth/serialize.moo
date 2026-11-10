@@ -483,7 +483,7 @@ end
 -- U15. copyString is defined on bytes: every vector of the reference's
 -- test_copy_string, the two ill-formed ones included.
 function T.TestU15CopyStringReferenceVectors()
-	local cases = {
+	local cases: { { any } } = {
 		{ "abc", 8, "abc" }, { "a\0bc", 8, "a" }, { "abcdefghij", 4, "abc" },
 		{ "\xC3\xA9\xC3\xA9", 4, "\xC3\xA9" }, { "\xC3\xA9\xC3\xA9", 3, "\xC3\xA9" },
 		{ "a\xF0\x9F\x98\x80", 3, "a" }, { "a\xF0\x9F\x98\x80", 4, "a" }, { "a\xF0\x9F\x98\x80", 5, "a" },
