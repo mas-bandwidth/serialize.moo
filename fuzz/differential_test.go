@@ -215,7 +215,7 @@ func compressedDecl(r *rand.Rand) []uint32 {
 			continue
 		}
 		delta := mx - mn
-		res := delta / float32(1+r.IntN(1<<r.IntN(33)))
+		res := delta / float32(1+r.Int64N(int64(1)<<r.IntN(33)))
 		if !(res > 0) {
 			continue
 		}
