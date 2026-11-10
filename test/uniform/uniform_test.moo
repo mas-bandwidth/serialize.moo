@@ -56,6 +56,21 @@ local function refusedBeforeBits(what: string, read: (r: any, h: any) -> boolean
 	check(ok2 and result2 == false and failed:error() == E.PastEnd, what .. ": a failed stream did not keep its first reason")
 end
 
+-- refusedHolderBeforeBits: a read handed no holder, or a frozen one, refuses
+-- as value_out_of_range before any bits move, and never raises (U7).
+local function refusedHolderBeforeBits(what: string, read: (r: any, h: any) -> boolean)
+	for _, frozen in { false, true } do
+		local h: any = if frozen then table.freeze({ value = "UNTOUCHED" }) else nil
+		local r = serialize.ReadStream.new(buffer.create(32))
+		local ok, result = pcall(read, r, h)
+		check(ok, what .. ": a read raised on a bad holder: " .. tostring(result))
+		check(result == false, what .. ": a bad holder was accepted on read")
+		check(r:error() == E.ValueOutOfRange, what .. ": refused as " .. tostring(r:error()) .. ", not value_out_of_range")
+		check(r:bitsProcessed() == 0, what .. ": bits moved before the holder was refused")
+		check(type(h) ~= "table" or h.value == "UNTOUCHED", what .. ": the refused read wrote its holder")
+	end
+end
+
 -- U1. Write buffers are a multiple of 8 bytes.
 function T.TestU1WriteBuffersAreAMultipleOf8()
 	for _, n in { 1, 4, 12 } do
@@ -144,6 +159,42 @@ function T.TestU7ReaderNeverTraps()
 	raises(function()
 		serialize.MeasureStream.new():serializeBytes(buffer.create(4), 0, -1)
 	end, "offset and count")
+end
+
+-- U7. A read holder must be a mutable table: a missing or frozen holder is
+-- refused as value_out_of_range before any bits move, and never raises.
+function T.TestU7ReadHolderMustBeAMutableTable()
+	local maxInt, bits, delta = serialize.compressedFloatParams(-10, 10, Float32.parse("0.01"))
+	local cases: { { any } } = {
+		{ "serializeBits", function(r, h) return r:serializeBits(h, 4) end },
+		{ "serializeBits64", function(r, h) return r:serializeBits64(h, 4) end },
+		{ "serializeBool", function(r, h) return r:serializeBool(h) end },
+		{ "serializeUint8", function(r, h) return r:serializeUint8(h) end },
+		{ "serializeUint16", function(r, h) return r:serializeUint16(h) end },
+		{ "serializeUint32", function(r, h) return r:serializeUint32(h) end },
+		{ "serializeUint64", function(r, h) return r:serializeUint64(h) end },
+		{ "serializeUint128", function(r, h) return r:serializeUint128(h) end },
+		{ "serializeInt", function(r, h) return r:serializeInt(h, 0, 100) end },
+		{ "serializeInt64", function(r, h) return r:serializeInt64(h, Int64.fromNumber(0), Int64.fromNumber(100)) end },
+		{ "serializeInt128", function(r, h) return r:serializeInt128(h, Int128.fromNumber(0), Int128.fromNumber(100)) end },
+		{ "serializeFixed64", function(r, h) return r:serializeFixed64(h, 16, 16, -100, 100) end },
+		{ "serializeFixed128", function(r, h) return r:serializeFixed128(h, 112, 16, 0, 100) end },
+		{ "serializeFixedNumber", function(r, h) return r:serializeFixedNumber(h, -10, 10) end },
+		{ "serializeIntRelative", function(r, h) return r:serializeIntRelative(0, h) end },
+		{ "serializeFloat", function(r, h) return r:serializeFloat(h) end },
+		{ "serializeFloatBits", function(r, h) return r:serializeFloatBits(h) end },
+		{ "serializeDouble", function(r, h) return r:serializeDouble(h) end },
+		{ "serializeDoubleBits", function(r, h) return r:serializeDoubleBits(h) end },
+		{ "serializeCompressedFloat", function(r, h) return r:serializeCompressedFloat(h, -10, 10, Float32.parse("0.01")) end },
+		{ "serializeCompressedFloatBits", function(r, h) return r:serializeCompressedFloatBits(h, -10, 10, Float32.parse("0.01")) end },
+		{ "serializeCompressedFloatPrecomputed", function(r, h) return r:serializeCompressedFloatPrecomputed(h, maxInt, bits, delta, -10) end },
+		{ "serializeCompressedFloatPrecomputedBits", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, maxInt, bits, delta, -10) end },
+		{ "serializeString", function(r, h) return r:serializeString(h, 4) end },
+	}
+	for _, case in cases do
+		local what: string, read: (any, any) -> boolean = case[1], case[2]
+		refusedHolderBeforeBits(what, read)
+	end
 end
 
 -- U8. Over-wide values on write are caught, never masked.
@@ -301,45 +352,47 @@ end
 -- move: refused as value_out_of_range on read, raised on write and measure.
 function T.TestU16DeclarationsValidatedOnRead()
 	local cases: { { any } } = {
-		{ "bits 0", function(r, h) return r:serializeBits(h, 0) end },
-		{ "bits 33", function(r, h) return r:serializeBits(h, 33) end },
-		{ "bits 1.5", function(r, h) return r:serializeBits(h, 1.5) end },
-		{ "bits64 65", function(r, h) return r:serializeBits64(h, 65) end },
-		{ "int min > max", function(r, h) return r:serializeInt(h, 5, 4) end },
-		{ "int64 min > max", function(r, h) return r:serializeInt64(h, 5, 4) end },
-		{ "int64 bound as a Uint64", function(r, h) return r:serializeInt64(h, 0, Uint64.parse("0xFFFFFFFFFFFFFFFF")) end },
-		{ "int128 min > max", function(r, h) return r:serializeInt128(h, Int128.fromNumber(1), 0) end },
-		{ "int64 bound fractional", function(r, h) return r:serializeInt64(h, 0.5, 4) end },
-		{ "int_relative previous -1", function(r, h) return r:serializeIntRelative(-1, h) end },
-		{ "int_relative previous past int32", function(r, h) return r:serializeIntRelative(2147483648, h) end },
-		{ "fixed integer bits 0", function(r, h) return r:serializeFixed64(h, 0, 16, 0, 1) end },
-		{ "fixed bounds outside Q8.8", function(r, h) return r:serializeFixed64(h, 8, 8, -200, 100) end },
-		{ "fixed min > max", function(r, h) return r:serializeFixed64(h, 16, 16, 5, 4) end },
-		{ "fixed128 not 128 bits", function(r, h) return r:serializeFixed128(h, 64, 16, 0, 1) end },
-		{ "fixed number past 2^47 - 1", function(r, h) return r:serializeFixedNumber(h, 0, Int64.parse("281474976710655")) end },
-		{ "compressed float min >= max", function(r, h) return r:serializeCompressedFloat(h, 10, 10, Float32.parse("0.01")) end },
-		{ "compressed float res 0", function(r, h) return r:serializeCompressedFloatBits(h, 0, 10, 0) end },
-		{ "compressed float min not a number", function(r, h) return r:serializeCompressedFloat(h, "x", 10, 1) end },
-		{ "compressed float res a fractional number", function(r, h) return r:serializeCompressedFloat(h, 0, 10, 0.01) end },
-		{ "compressed float min a fractional number", function(r, h) return r:serializeCompressedFloatBits(h, -0.5, 10, 1) end },
-		{ "compressed float max a fractional number", function(r, h) return r:serializeCompressedFloat(h, 0, 10.5, 1) end },
-		{ "precomputed delta a fractional number", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, 0.01, 0) end },
-		{ "precomputed min a fractional number", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 20, 5, 1, -0.5) end },
-		{ "precomputed bits inconsistent", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 9, 20, -10) end },
-		{ "precomputed max integer 0", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 0, 0, 20, -10) end },
-		{ "precomputed max integer past 4294967040", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 4294967041, 32, 20, 0) end },
-		{ "precomputed delta 0", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, 0, -10) end },
-		{ "precomputed delta infinite", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 1000, 10, Float32.fromBits(0x7F800000), 0) end },
-		{ "precomputed delta negative", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, -20, -10) end },
-		{ "string buffer size 0", function(r, h) return r:serializeString(h, 0) end },
+		{ "bits 0", function(r, h) return r:serializeBits(h, 0) end, "bits must be in [1,32]" },
+		{ "bits 33", function(r, h) return r:serializeBits(h, 33) end, "bits must be in [1,32]" },
+		{ "bits 1.5", function(r, h) return r:serializeBits(h, 1.5) end, "bits must be in [1,32]" },
+		{ "bits64 65", function(r, h) return r:serializeBits64(h, 65) end, "bits must be in [1,64]" },
+		{ "int min > max", function(r, h) return r:serializeInt(h, 5, 4) end, "min must not be greater than max" },
+		{ "int64 min > max", function(r, h) return r:serializeInt64(h, 5, 4) end, "min must not be greater than max" },
+		{ "int64 bound as a Uint64", function(r, h) return r:serializeInt64(h, 0, Uint64.parse("0xFFFFFFFFFFFFFFFF")) end, "serializeInt64 max must be Int64 or an integer-valued number" },
+		{ "int128 min > max", function(r, h) return r:serializeInt128(h, Int128.fromNumber(1), 0) end, "min must not be greater than max" },
+		{ "int64 bound fractional", function(r, h) return r:serializeInt64(h, 0.5, 4) end, "serializeInt64 min must be Int64 or an integer-valued number" },
+		{ "int_relative previous -1", function(r, h) return r:serializeIntRelative(-1, h) end, "int relative previous must be in [0,2147483647]" },
+		{ "int_relative previous past int32", function(r, h) return r:serializeIntRelative(2147483648, h) end, "int relative previous must be in [0,2147483647]" },
+		{ "fixed integer bits 0", function(r, h) return r:serializeFixed64(h, 0, 16, 0, 1) end, "fixed point requires" },
+		{ "fixed bounds outside Q8.8", function(r, h) return r:serializeFixed64(h, 8, 8, -200, 100) end, "fixed point bounds in whole units do not fit the Q format" },
+		{ "fixed min > max", function(r, h) return r:serializeFixed64(h, 16, 16, 5, 4) end, "fixed point requires" },
+		{ "fixed128 not 128 bits", function(r, h) return r:serializeFixed128(h, 64, 16, 0, 1) end, "fixed point requires" },
+		{ "fixed number past 2^47 - 1", function(r, h) return r:serializeFixedNumber(h, 0, Int64.parse("281474976710655")) end, "serializeFixedNumber max must be at most 2^47 - 1" },
+		{ "compressed float min >= max", function(r, h) return r:serializeCompressedFloat(h, 10, 10, Float32.parse("0.01")) end, "compressed float requires min < max and resolution > 0" },
+		{ "compressed float res 0", function(r, h) return r:serializeCompressedFloatBits(h, 0, 10, 0) end, "compressed float requires min < max and resolution > 0" },
+		{ "compressed float min not a number", function(r, h) return r:serializeCompressedFloat(h, "x", 10, 1) end, "serializeCompressedFloat min must be an integer-valued number or a Float32" },
+		{ "compressed float res a fractional number", function(r, h) return r:serializeCompressedFloat(h, 0, 10, 0.01) end, "serializeCompressedFloat res must be an integer-valued number or a Float32" },
+		{ "compressed float min a fractional number", function(r, h) return r:serializeCompressedFloatBits(h, -0.5, 10, 1) end, "serializeCompressedFloatBits min must be an integer-valued number or a Float32" },
+		{ "compressed float max a fractional number", function(r, h) return r:serializeCompressedFloat(h, 0, 10.5, 1) end, "serializeCompressedFloat max must be an integer-valued number or a Float32" },
+		{ "precomputed delta a fractional number", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, 0.01, 0) end, "serializeCompressedFloatPrecomputed delta must be an integer-valued number or a Float32" },
+		{ "precomputed min a fractional number", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 20, 5, 1, -0.5) end, "serializeCompressedFloatPrecomputedBits min must be an integer-valued number or a Float32" },
+		{ "precomputed bits inconsistent", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 9, 20, -10) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "precomputed max integer 0", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 0, 0, 20, -10) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "precomputed max integer past 4294967040", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 4294967041, 32, 20, 0) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "precomputed delta 0", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, 0, -10) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "precomputed delta infinite", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, 1000, 10, Float32.fromBits(0x7F800000), 0) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "precomputed delta negative", function(r, h) return r:serializeCompressedFloatPrecomputed(h, 1000, 10, -20, -10) end, "precomputed compressed float constants must be exactly what CompressedFloatParams derives" },
+		{ "string buffer size 0", function(r, h) return r:serializeString(h, 0) end, "string buffer size must be in [1,1<<31)" },
 	}
 	for _, case in cases do
-		local what: string, read: (any, any) -> boolean = case[1], case[2]
+		local what: string, read: (any, any) -> boolean, text: string = case[1], case[2], case[3]
 		refusedBeforeBits(what, read)
-		local okW = pcall(read, serialize.WriteStream.new(buffer.create(16)), { value = 0 })
-		check(not okW, what .. ": a write did not raise on the bad declaration")
-		local okM = pcall(read, serialize.MeasureStream.new(), { value = 0 })
-		check(not okM, what .. ": a measure did not raise on the bad declaration")
+		raises(function()
+			read(serialize.WriteStream.new(buffer.create(16)), { value = 0 })
+		end, text)
+		raises(function()
+			read(serialize.MeasureStream.new(), { value = 0 })
+		end, text)
 	end
 	-- the bound past 4294967040 raises on write too, by the precomputed text
 	raises(function()

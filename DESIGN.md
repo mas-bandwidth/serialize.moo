@@ -171,8 +171,10 @@ integer up to 2^47 - 1 exactly and no wider one, and moo has no integer type.
   (all sign bits for a signed right shift), division by zero gives zero
   quotient and remainder, signed division truncates toward zero and
   `MIN / -1` wraps to `MIN`. Operators `== < <= + - * unary-` and `tostring`
-  work on values of one class. Every limb operation stays below 2^47, so no
-  moo number saturates inside the library.
+  work on values of one class. `==` against a number does not enter the wide
+  compare; `eq` does. A number operand is converted before the compare, and
+  wide-vs-wide still compares the wide values. Every limb operation stays
+  below 2^47, so no moo number saturates inside the library.
 - `Int64.fromNumberRaw(n)` / `toNumberRaw(x)` move a number to and from its own
   Q48.16 raw bits; `serializeFixedNumber` uses them to put a moo number on the
   wire as fixed Q48.16, the exact wire of `serializeFixed64(raw, 48, 16, min,
