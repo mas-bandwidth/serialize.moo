@@ -16,12 +16,12 @@ end
 function T.TestEntryLoadsItsOwnModules()
 	local serialize = require("./serialize")
 	check(serialize.FORMAT_VERSION == "2.0", "format version 2.0")
-	check(serialize.VERSION == "2.1.2", "port version 2.1.2")
+	check(serialize.VERSION == "2.1.3", "port version 2.1.3")
 	check(table.isfrozen(serialize), "the API table is frozen")
 	local changed = pcall(function()
 		(serialize :: any).VERSION = "changed"
 	end)
-	check(not changed and serialize.VERSION == "2.1.2", "the port version is frozen")
+	check(not changed and serialize.VERSION == "2.1.3", "the port version is frozen")
 	local w = serialize.WriteStream.new(buffer.create(8))
 	check(w:serializeBits({ value = 5 }, 3), "the entry works")
 end

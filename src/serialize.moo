@@ -20,7 +20,9 @@ export type Holder<T> = Stream.Holder<T>
 local S = {}
 
 -- The port release and the wire format it implements (STANDARD.md, Format version).
-S.VERSION = "2.1.2"
+-- VERSION is this port's own release, the tag v<VERSION> (tools/check-ci.sh),
+-- never the reference's release it vendors (DESIGN.md, "The vendored standard").
+S.VERSION = "2.1.3"
 S.FORMAT_VERSION = "2.0"
 
 -- the refusal reasons, STANDARD.md's closed list: stream:error() returns one

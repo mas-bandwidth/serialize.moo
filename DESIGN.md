@@ -43,7 +43,7 @@ on a refusal.
 
 | entry | what |
 |---|---|
-| `VERSION` | `"2.1.2"` (the port release) |
+| `VERSION` | `"2.1.3"` (the port release: its tag is `v2.1.3`, checked by `tools/check-ci.sh`; not the vendored reference's release) |
 | `FORMAT_VERSION` | `"2.0"` |
 | `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`, and `Rejected` (`"rejected"`, standard 2.1: the caller's own refusal); `stream:error()` returns one |
 | `WriteStream.new(buffer)`, `ReadStream.new(buffer)`, `MeasureStream.new()` | the streams |
