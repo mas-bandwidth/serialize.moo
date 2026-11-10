@@ -144,12 +144,13 @@ function T.TestFaddFarExponentStaysExact()
 		check(A + B <= LIMIT, string.format("%08X + %08X: the aligned sum %s passes 2^47 - 1", p[1], p[2], tostring(A + B)))
 		check((A + B) - A == B and A - (A - B) == B, string.format("%08X + %08X: the aligned sum and difference are exact", p[1], p[2]))
 		check(F.fadd(p[1], p[2]) == p[3], string.format("%08X + %08X = %08X", p[1], p[2], p[3]))
-		-- the reversed witness: the 2.0 alignment's sum, which moo saturates
-		-- past every moo integer (so a test of the sum is not blind)
+		-- the reversed witness: the 2.0 alignment's operands, whose sum is
+		-- past every moo integer (so a test of the sum is not blind); compare
+		-- them with the limit instead of forming the sum
 		local drop = (ea - eb) - 22
 		local oldA = ma * 2 ^ 23
 		local oldB = (mb // 2 ^ drop) * 2 + (if (mb // 2 ^ drop) * 2 ^ drop ~= mb then 1 else 0)
-		if (oldA + oldB) - oldA ~= oldB then
+		if oldB > LIMIT - oldA then
 			saturated += 1
 		end
 	end
