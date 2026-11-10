@@ -1,7 +1,8 @@
 # serialize.moo CI: the lints, the C oracles, moo-analyze and every test
-# directory on the pinned moo, and the vendored corpus checked against its
-# pin. Every job runs on the fleet's self-hosted runners, never on a
-# GitHub-hosted runner (tools/check-ci.sh refuses one).
+# directory on the pinned moo (checked in the Linux test and fuzz jobs), and
+# the vendored corpus checked against its pin. Every job runs on the fleet's
+# self-hosted runners, never on a GitHub-hosted runner (tools/check-ci.sh
+# refuses one).
 name: ci
 
 on:
@@ -20,12 +21,15 @@ concurrency:
 
 jobs:
   test:
-    name: test on the pinned moo
+    name: test on the checked pinned moo
     # The repository is public and these are the fleet's self-hosted runners:
     # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 20
+    env:
+      MOO: ${{ github.workspace }}/dist/moo-checked/moo
+      MOO_ANALYZE: ${{ github.workspace }}/dist/moo-checked/moo-analyze
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,17 +43,20 @@ jobs:
           test -n "$pin"
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
 
-      - name: Cache dist/moo
+      - name: Cache dist/moo-checked
         uses: actions/cache@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: dist/moo-checked
+          key: moo-checked-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
 
-      # dist-moo refuses a checkout that is not the pin; a cached dist/moo
-      # whose PIN file is the pin is used as it is
-      - name: Build the pinned moo
+      # dist-moo-checked refuses a checkout that is not the pin; a cached
+      # dist/moo-checked whose PIN file is the pin is used as it is
+      - name: Build the checked pinned moo
         run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+          if [ "$(cat dist/moo-checked/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo-checked JOBS=4; fi
+
+      - name: Check the checked moo refuses overflow
+        run: make check-moo
 
       - uses: actions/setup-go@v5
         with:
@@ -60,12 +67,15 @@ jobs:
         run: make test
 
   fuzz:
-    name: differential fuzz against serialize.go, and its negative control
+    name: differential fuzz against serialize.go on the checked moo, and its negative control
     # The repository is public and these are the fleet's self-hosted runners:
     # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
     timeout-minutes: 15
+    env:
+      MOO: ${{ github.workspace }}/dist/moo-checked/moo
+      MOO_ANALYZE: ${{ github.workspace }}/dist/moo-checked/moo-analyze
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,15 +89,18 @@ jobs:
           test -n "$pin"
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
 
-      - name: Cache dist/moo
+      - name: Cache dist/moo-checked
         uses: actions/cache@v4
         with:
-          path: dist/moo
-          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+          path: dist/moo-checked
+          key: moo-checked-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
 
-      - name: Build the pinned moo
+      - name: Build the checked pinned moo
         run: |
-          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+          if [ "$(cat dist/moo-checked/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo-checked JOBS=4; fi
+
+      - name: Check the checked moo refuses overflow
+        run: make check-moo
 
       - uses: actions/setup-go@v5
         with:
