@@ -68,13 +68,14 @@ dist-moo-checked:
 
 # check-moo: the negative control for dist-moo-checked. The largest exact
 # integer is 2^47 - 1; 2^47 must raise number overflow on the checked binary,
-# not saturate to 2^47 - 1 and exit 0.
+# not saturate to 2^47 - 1 and exit 0. The 2^46 comes in as an argument, so
+# the doubling is arithmetic at run time and the compiler cannot fold it.
 check-moo:
 	@if [ "$$(cat $(MOO_CHECKED_DIST)/PIN 2>/dev/null)" != "$(MOO_PIN)" ]; then \
 		echo "check-moo REFUSES: dist/moo-checked is not the pin $(MOO_PIN); run make dist-moo-checked"; exit 1; fi
 	@rm -rf build/check-moo && mkdir -p build/check-moo
-	@printf 'local n = 2 ^ 46\nprint(n * 2)\n' > build/check-moo/overflow.moo
-	@if $(MOO_CHECKED) build/check-moo/overflow.moo >build/check-moo/out 2>&1; then \
+	@printf 'local n = tonumber((...))\nprint(n * 2)\n' > build/check-moo/overflow.moo
+	@if $(MOO_CHECKED) build/check-moo/overflow.moo -a 70368744177664 >build/check-moo/out 2>&1; then \
 		echo "check-moo REFUSES: the checked moo did not raise on 2^47; it is not a checked build"; cat build/check-moo/out; exit 1; fi
 	@grep -q 'number overflow' build/check-moo/out || { echo "check-moo REFUSES: 2^47 failed, but not with number overflow:"; cat build/check-moo/out; exit 1; }
 	@echo "check-moo: 2^47 raises number overflow on the checked moo"
