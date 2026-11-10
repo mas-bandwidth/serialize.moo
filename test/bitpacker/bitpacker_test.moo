@@ -81,6 +81,63 @@ function T.TestBytesAligned()
 	check(r:bitsRemaining() == 0, "all read")
 end
 
+local RAISE_BYTES_RANGE = "offset and count must be a range inside the buffer"
+
+local function writeBytesBadRange(prefixBits: number, offset: number, count: number)
+	local w = serialize.BitWriter.new(buffer.create(16))
+	if prefixBits > 0 then
+		w:writeBits(0, prefixBits)
+	end
+	local before = w:bitsWritten()
+	raises(function()
+		w:writeBytes(buffer.fromstring("abcd"), offset, count)
+	end, RAISE_BYTES_RANGE)
+	check(w:bitsWritten() == before, "writeBytes moved bits on a bad range")
+end
+
+local function readBytesBadRange(prefixBits: number, offset: number, count: number)
+	local r = serialize.BitReader.new(buffer.fromstring("abcdefgh"))
+	if prefixBits > 0 then
+		r:readBits(prefixBits)
+	end
+	local before = r:bitsRead()
+	local dst = buffer.create(4)
+	raises(function()
+		r:readBytes(dst, offset, count)
+	end, RAISE_BYTES_RANGE)
+	check(r:bitsRead() == before, "readBytes moved bits on a bad range")
+end
+
+-- a bad offset or count is refused before the alignment check or any bit
+-- movement, at an aligned and an unaligned position
+function T.TestWriteBytesRejectsBadRanges()
+	for _, prefix in { 0, 8, 3 } do
+		writeBytesBadRange(prefix, -1, 1)
+		writeBytesBadRange(prefix, -2, 0)
+		writeBytesBadRange(prefix, 0, -1)
+		writeBytesBadRange(prefix, 0, -3)
+		writeBytesBadRange(prefix, 0.5, 1)
+		writeBytesBadRange(prefix, 0, 0.5)
+		writeBytesBadRange(prefix, 0, 5)
+		writeBytesBadRange(prefix, 3, 2)
+		writeBytesBadRange(prefix, 5, 0)
+	end
+end
+
+function T.TestReadBytesRejectsBadRanges()
+	for _, prefix in { 0, 8, 3 } do
+		readBytesBadRange(prefix, -1, 1)
+		readBytesBadRange(prefix, -2, 0)
+		readBytesBadRange(prefix, 0, -1)
+		readBytesBadRange(prefix, 0, -3)
+		readBytesBadRange(prefix, 0.5, 1)
+		readBytesBadRange(prefix, 0, 0.5)
+		readBytesBadRange(prefix, 0, 5)
+		readBytesBadRange(prefix, 3, 2)
+		readBytesBadRange(prefix, 5, 0)
+	end
+end
+
 function T.TestPanics()
 	local w = serialize.BitWriter.new(buffer.create(8))
 	raises(function()
