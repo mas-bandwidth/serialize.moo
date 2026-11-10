@@ -20,7 +20,9 @@ export type Holder<T> = Stream.Holder<T>
 local S = {}
 
 -- The port release and the wire format it implements (STANDARD.md, Format version).
-S.VERSION = "2.1.2"
+-- VERSION is this port's own release, the tag v<VERSION> (tools/check-ci.sh),
+-- never the reference's release it vendors (DESIGN.md, "The vendored standard").
+S.VERSION = "2.1.3"
 S.FORMAT_VERSION = "2.0"
 
 -- the refusal reasons, STANDARD.md's closed list: stream:error() returns one
@@ -78,7 +80,7 @@ end
 
 -- compressedFloatParams(min, max, res): the precomputed compressed float
 -- constants (maxIntegerValue, bits, delta as a Float32); min, max and res are
--- numbers (by the boundary rule) or Float32 values.
+-- integer-valued numbers (by the boundary rule) or Float32 values.
 S.compressedFloatParams = Stream.compressedFloatParams
 
 -- refusalName(reason): a latched reason's name as STANDARD.md spells it, or

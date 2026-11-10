@@ -338,7 +338,8 @@ local function toDecimal(a: { number }, n: number, signed: boolean): string
 end
 
 -- parse reads optional '-', then decimal digits or 0x and hex digits. A decimal
--- magnitude must fit the signed or unsigned width; hex wraps modulo 2^(32n).
+-- must fit the signed or unsigned width, so an unsigned one is never negative
+-- (-0 is 0); hex wraps modulo 2^(32n).
 -- Returns nil on any other text.
 local function parse(text: string, n: number, signed: boolean): { number }?
 	local negative = false
@@ -367,7 +368,7 @@ local function parse(text: string, n: number, signed: boolean): { number }?
 					bound[i] = MASK32
 				end
 			end
-		else
+		elseif not negative then
 			for i = 1, n do
 				bound[i] = MASK32
 			end

@@ -161,6 +161,31 @@ function T.TestU7ReaderNeverTraps()
 	end, "offset and count")
 end
 
+-- U7. bytes of zero count with no destination is not misuse on any stream:
+-- it aligns and copies nothing. A positive count with no destination is
+-- refused on read and raises on write and measure.
+function T.TestU7ZeroLengthBytesWithNoDestination()
+	for _, count in { 0, (nil :: any) } do
+		local what = if count == nil then "no count" else "count 0"
+		local w = serialize.WriteStream.new(buffer.create(8))
+		check(w:serializeBits({ value = 5 }, 3), "three bits")
+		check(w:serializeBytes((nil :: any), 0, count) and w:bitsProcessed() == 8, what .. ": a write aligns and copies nothing")
+		w:flush()
+		local r = serialize.ReadStream.new(w:data())
+		local h = { value = 0 }
+		check(r:serializeBits(h, 3) and h.value == 5, "the three bits read back")
+		check(r:serializeBytes((nil :: any), 0, count) and r:bitsProcessed() == 8 and r:ok(), what .. ": a read aligns and copies nothing")
+		local m = serialize.MeasureStream.new()
+		check(m:serializeBytes((nil :: any), 0, count) and m:bitsProcessed() == 7, what .. ": a measure counts the align")
+	end
+	raises(function()
+		serialize.WriteStream.new(buffer.create(8)):serializeBytes((nil :: any), 0, 1)
+	end, "serializeBytes")
+	raises(function()
+		serialize.MeasureStream.new():serializeBytes((nil :: any), 0, 1)
+	end, "serializeBytes")
+end
+
 -- U7. A read holder must be a mutable table: a missing or frozen holder is
 -- refused as value_out_of_range before any bits move, and never raises.
 function T.TestU7ReadHolderMustBeAMutableTable()
@@ -265,6 +290,50 @@ function T.TestU11FlushStoresTheLastWord()
 	w:flush()
 	local d = w:data()
 	check(buffer.len(d) == 2 and buffer.readu8(d, 0) == 0xBC and buffer.readu8(d, 1) == 0x0A, "flush stored the partial word")
+end
+
+-- U11. Flush ends the write: a write after a flush that stored a partial word
+-- is write misuse (U9), trapped on every write path before a bit is written.
+-- A flush at a 64-bit boundary stores nothing, and reset starts a new write.
+function T.TestU11WriteAfterFlushTraps()
+	local paths: { { any } } = {
+		{ "serializeBits", function(w) w:serializeBits({ value = 1 }, 4) end },
+		{ "serializeBits64", function(w) w:serializeBits64({ value = Uint64.fromNumber(1) }, 40) end },
+		{ "serializeBool", function(w) w:serializeBool({ value = true }) end },
+		{ "serializeInt", function(w) w:serializeInt({ value = 3 }, 0, 100) end },
+		{ "serializeAlign", function(w) w:serializeAlign() end },
+		{ "serializeBytes", function(w) w:serializeBytes(buffer.create(2)) end },
+		{ "serializeBytes of none", function(w) w:serializeBytes(buffer.create(0)) end },
+		{ "serializeString", function(w) w:serializeString({ value = "ab" }, 8) end },
+		{ "serializeCompressedFloat", function(w) w:serializeCompressedFloat({ value = 1 }, -10, 10, Float32.parse("0.01")) end },
+	}
+	for _, path in paths do
+		local what: string, write: (any) -> () = path[1], path[2]
+		local w = serialize.WriteStream.new(buffer.create(16))
+		check(w:serializeBits({ value = 0x5 }, 3), "three bits")
+		w:flush()
+		traps(w, function() write(w) end, "after a flush", what .. " after a flush that stored a partial word")
+		check(w:bitsProcessed() == 3, what .. ": the trapped write wrote " .. (w:bitsProcessed() - 3) .. " bits")
+		w:flush()
+		check(buffer.tostring(w:data()) == "\x05", what .. ": the flushed bytes are unchanged")
+	end
+	local bw = serialize.BitWriter.new(buffer.create(16))
+	bw:writeBits(1, 8)
+	bw:flushBits()
+	raises(function() bw:writeBits(1, 1) end, "after a flush")
+	raises(function() bw:writeBytes(buffer.create(2)) end, "after a flush")
+	raises(function() bw:writeBytes(buffer.create(0)) end, "after a flush")
+	check(bw:bitsWritten() == 8, "the BitWriter wrote nothing after its flush")
+	-- a flush at a 64-bit boundary stored no partial word: the write goes on
+	local w = serialize.WriteStream.new(buffer.create(16))
+	check(w:serializeBits64({ value = Uint64.fromNumber(0) }, 64), "64 bits")
+	w:flush()
+	check(w:serializeBits({ value = 0xAB }, 8) and w:bitsProcessed() == 72, "a write after a flush that stored nothing")
+	-- a second flush is not a write; reset starts a new write
+	w:flush()
+	w:flush()
+	w:reset(buffer.create(8))
+	check(w:serializeBits({ value = 1 }, 1), "reset after a flush clears it")
 end
 
 -- U12. end on a write or measure is a no-op returning true, whatever the
@@ -463,7 +532,8 @@ end
 -- The check model: a compressed_float declaration whose delta or delta / res
 -- is not finite in float32 traps on write and measure, never clamped (it was
 -- silently clamped to 4294967040 values); compressedFloatParams traps on it,
--- as the reference's compressed_float_params asserts. A read is unchanged.
+-- as the reference's compressed_float_params asserts. A read refuses it as
+-- value_out_of_range before any bits move (U7, U16).
 function T.TestCompressedDeclarationNotFiniteTraps()
 	local mn, mx, res = 0, Float32.parse("1e38"), Float32.parse("1e-38")
 	local w = serialize.WriteStream.new(buffer.create(8))
@@ -474,10 +544,13 @@ function T.TestCompressedDeclarationNotFiniteTraps()
 	traps(m, function() m:serializeCompressedFloatBits({ value = 0 }, Float32.parse("-3e38"), Float32.parse("3e38"), 1) end, "finite", "measure a delta past FLT_MAX")
 	local ok = pcall(serialize.compressedFloatParams, mn, mx, res)
 	check(not ok, "compressedFloatParams (0, 1e38, 1e-38) did not trap")
-	-- a read still clamps the declaration and reads
-	local r = serialize.ReadStream.new(buffer.create(8))
-	local h = { value = 99 }
-	check(r:serializeCompressedFloat(h, mn, mx, res) and h.value == 0, "a read of (0, 1e38, 1e-38) is unchanged")
+	-- a read refuses the declaration, never clamps it
+	refusedBeforeBits("read (0, 1e38, 1e-38)", function(r, h)
+		return r:serializeCompressedFloat(h, mn, mx, res)
+	end)
+	refusedBeforeBits("read a delta past FLT_MAX", function(r, h)
+		return r:serializeCompressedFloatBits(h, Float32.parse("-3e38"), Float32.parse("3e38"), 1)
+	end)
 end
 
 -- U15. copyString is defined on bytes: every vector of the reference's

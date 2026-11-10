@@ -15,7 +15,7 @@ imported.
 **The vendored standard.** `STANDARD.md`, `IMPLEMENTING.md`, `conformance/`
 and `conformance-controls/` (the unknown-operation control and the 18
 `*.expected` lists) are VERBATIM copies of mas-bandwidth/serialize at tag
-v2.1.3 (`7bf1877b38cfdd737d0bf102a546ec2674335786`, format 2.0, standard 2.1:
+v2.1.4 (`65e43ca1fef11362300f2ca569a7177c2718f20a`, format 2.0, standard 2.1:
 the `rejected` refusal reason, its `reject` vectors and controls, and the
 uniform rules U1 to U16 in IMPLEMENTING.md). CI diffs them against the tag; a
 change arrives by re-vendoring from a new tag with `tools/revendor.sh <ref>`.
@@ -43,7 +43,7 @@ on a refusal.
 
 | entry | what |
 |---|---|
-| `VERSION` | `"2.1.2"` (the port release) |
+| `VERSION` | `"2.1.3"` (the port release: its tag is `v2.1.3`, checked by `tools/check-ci.sh`; not the vendored reference's release) |
 | `FORMAT_VERSION` | `"2.0"` |
 | `Refusal` | the reasons, STANDARD.md's closed list: `PastEnd` (`"past_end"`), `ValueOutOfRange`, `NonzeroPadding`, `TrailingData`, `NonFiniteFloat`, `InvalidUtf8`, `EmbeddedNul`, `NonCanonical`, and `Rejected` (`"rejected"`, standard 2.1: the caller's own refusal); `stream:error()` returns one |
 | `WriteStream.new(buffer)`, `ReadStream.new(buffer)`, `MeasureStream.new()` | the streams |
@@ -88,7 +88,8 @@ Every stream also has `reset`, `isWriting`, `isReading`, `error`, `ok`,
 `setContext`, `context`; a WriteStream has `flush`, `data` and
 `bitsAvailable`. `reset` re-initializes a stream and clears its latch (U13).
 A WriteStream's buffer is unspecified until `flush`, which is required
-before `data` (U11).
+before `data` (U11). Flush ends the write: a write after a flush that stored
+a partial word raises before any bit is written (U11, U9), until `reset`.
 
 `stream:refusal()` is the latched reason's name, or `"none"` (U14); an
 object's own error value, which `error()` returns as given, is named
@@ -99,8 +100,9 @@ measure it records nothing and returns `false` (U6, U9).
 
 Wide parameters (`min`, `max` of int64, int128 and fixed) and wide values on
 write take the class or an integer-valued number; reads always produce the
-class. Compressed float parameters take a number (converted by the boundary
-rule) or a `Float32`.
+class. Compressed float parameters take an integer-valued number (converted
+by the boundary rule) or a `Float32`; a fractional number such as `0.01`
+raises on write and measure and is refused on read.
 
 Misuse on a write or a measure raises, naming the rule, with serialize.go's
 panic text, before anything else and even on a stream with a latched error:
@@ -110,10 +112,13 @@ range, int bounds outside int32 (U5), a ranged `min > max`, int64 or int128
 bounds the class does not hold, a fixed point Q format or bounds that do not
 fit, a `serializeFixedNumber` max past 2^47 - 1, an int_relative `previous`
 outside [0, 2147483647], a compressed float declaration that is not `min <
-max` and `res > 0`, precomputed constants whose `bits` is not
+max` and `res > 0` or whose `delta` or `delta / res` is not finite in
+float32, precomputed constants whose `bits` is not
 `bitsRequired(0, maxIntegerValue)`, whose `maxIntegerValue` is outside [1,
 4294967040] or whose `delta` is not positive and finite, a string buffer size
-below 1, a bytes range outside its buffer, an object that is not one, and a
+below 1, a bytes range outside its buffer (no buffer, `nil`, holds no bytes, so
+a count of zero with none aligns and copies nothing on every stream), an
+object that is not one, and a
 ReadStream over data that is not a buffer: each is refused as
 `value_out_of_range` through the one latch before any bits move, so a stream
 that already failed keeps its first reason. A value of a type
@@ -123,8 +128,8 @@ write misuse too, and traps the same way, never latching (IMPLEMENTING.md
 v2.1.1, U9): a write past the room left in the buffer, a value outside its
 range, a non-finite float, double or compressed_float value, a string past its
 buffer size, and a compressed_float declaration whose `delta` or `delta / res`
-is not finite in float32 (never clamped on a write or a measure; a read clamps
-it, as every reader does). A write or a measure stream has no refusal state:
+is not finite in float32 (never clamped; a read refuses it as
+`value_out_of_range` before any bits move, U7, U16). A write or a measure stream has no refusal state:
 misuse records nothing, and a later operation succeeds. A measure makes every
 check a write makes except the room (U6). A write checks room for the whole operation,
 length, align and payload, before it writes any of it (U10), and a value
