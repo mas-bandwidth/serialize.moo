@@ -56,6 +56,21 @@ local function refusedBeforeBits(what: string, read: (r: any, h: any) -> boolean
 	check(ok2 and result2 == false and failed:error() == E.PastEnd, what .. ": a failed stream did not keep its first reason")
 end
 
+-- refusedHolderBeforeBits: a read handed no holder, or a frozen one, refuses
+-- as value_out_of_range before any bits move, and never raises (U7).
+local function refusedHolderBeforeBits(what: string, read: (r: any, h: any) -> boolean)
+	for _, frozen in { false, true } do
+		local h: any = if frozen then table.freeze({ value = "UNTOUCHED" }) else nil
+		local r = serialize.ReadStream.new(buffer.create(32))
+		local ok, result = pcall(read, r, h)
+		check(ok, what .. ": a read raised on a bad holder: " .. tostring(result))
+		check(result == false, what .. ": a bad holder was accepted on read")
+		check(r:error() == E.ValueOutOfRange, what .. ": refused as " .. tostring(r:error()) .. ", not value_out_of_range")
+		check(r:bitsProcessed() == 0, what .. ": bits moved before the holder was refused")
+		check(type(h) ~= "table" or h.value == "UNTOUCHED", what .. ": the refused read wrote its holder")
+	end
+end
+
 -- U1. Write buffers are a multiple of 8 bytes.
 function T.TestU1WriteBuffersAreAMultipleOf8()
 	for _, n in { 1, 4, 12 } do
@@ -144,6 +159,42 @@ function T.TestU7ReaderNeverTraps()
 	raises(function()
 		serialize.MeasureStream.new():serializeBytes(buffer.create(4), 0, -1)
 	end, "offset and count")
+end
+
+-- U7. A read holder must be a mutable table: a missing or frozen holder is
+-- refused as value_out_of_range before any bits move, and never raises.
+function T.TestU7ReadHolderMustBeAMutableTable()
+	local maxInt, bits, delta = serialize.compressedFloatParams(-10, 10, Float32.parse("0.01"))
+	local cases: { { any } } = {
+		{ "serializeBits", function(r, h) return r:serializeBits(h, 4) end },
+		{ "serializeBits64", function(r, h) return r:serializeBits64(h, 4) end },
+		{ "serializeBool", function(r, h) return r:serializeBool(h) end },
+		{ "serializeUint8", function(r, h) return r:serializeUint8(h) end },
+		{ "serializeUint16", function(r, h) return r:serializeUint16(h) end },
+		{ "serializeUint32", function(r, h) return r:serializeUint32(h) end },
+		{ "serializeUint64", function(r, h) return r:serializeUint64(h) end },
+		{ "serializeUint128", function(r, h) return r:serializeUint128(h) end },
+		{ "serializeInt", function(r, h) return r:serializeInt(h, 0, 100) end },
+		{ "serializeInt64", function(r, h) return r:serializeInt64(h, Int64.fromNumber(0), Int64.fromNumber(100)) end },
+		{ "serializeInt128", function(r, h) return r:serializeInt128(h, Int128.fromNumber(0), Int128.fromNumber(100)) end },
+		{ "serializeFixed64", function(r, h) return r:serializeFixed64(h, 16, 16, -100, 100) end },
+		{ "serializeFixed128", function(r, h) return r:serializeFixed128(h, 112, 16, 0, 100) end },
+		{ "serializeFixedNumber", function(r, h) return r:serializeFixedNumber(h, -10, 10) end },
+		{ "serializeIntRelative", function(r, h) return r:serializeIntRelative(0, h) end },
+		{ "serializeFloat", function(r, h) return r:serializeFloat(h) end },
+		{ "serializeFloatBits", function(r, h) return r:serializeFloatBits(h) end },
+		{ "serializeDouble", function(r, h) return r:serializeDouble(h) end },
+		{ "serializeDoubleBits", function(r, h) return r:serializeDoubleBits(h) end },
+		{ "serializeCompressedFloat", function(r, h) return r:serializeCompressedFloat(h, -10, 10, Float32.parse("0.01")) end },
+		{ "serializeCompressedFloatBits", function(r, h) return r:serializeCompressedFloatBits(h, -10, 10, Float32.parse("0.01")) end },
+		{ "serializeCompressedFloatPrecomputed", function(r, h) return r:serializeCompressedFloatPrecomputed(h, maxInt, bits, delta, -10) end },
+		{ "serializeCompressedFloatPrecomputedBits", function(r, h) return r:serializeCompressedFloatPrecomputedBits(h, maxInt, bits, delta, -10) end },
+		{ "serializeString", function(r, h) return r:serializeString(h, 4) end },
+	}
+	for _, case in cases do
+		local what: string, read: (any, any) -> boolean = case[1], case[2]
+		refusedHolderBeforeBits(what, read)
+	end
 end
 
 -- U8. Over-wide values on write are caught, never masked.
