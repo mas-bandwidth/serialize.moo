@@ -1122,16 +1122,18 @@ end
 
 -- serializeBytes(data[, offset, count]): aligns, then copies count bytes of
 -- the buffer (all of it by default); a read fills them. Both sides know the
--- length: it is not sent.
-function Shared.serializeBytes(self: StreamState, data: buffer, offset: number?, count: number?): boolean
+-- length: it is not sent. No buffer (nil) holds no bytes: a count of zero
+-- aligns and copies nothing (U7).
+function Shared.serializeBytes(self: StreamState, data: buffer?, offset: number?, count: number?): boolean
 	-- the destination's own capacity bounds the declaration; on a read a range
 	-- outside it, a negative count included, is refused (U7, U16)
-	if not needDecl(self, type(data) == "buffer", "serializeBytes", "data", "a buffer") then
+	if not needDecl(self, data == nil or type(data) == "buffer", "serializeBytes", "data", "a buffer") then
 		return false
 	end
+	local len = if data == nil then 0 else buffer.len(data)
 	local off = offset or 0
-	local cnt = count or (buffer.len(data) - (if type(off) == "number" then off else 0))
-	if not needDecl(self, isInteger(off, 0, buffer.len(data)) and isInteger(cnt, 0, buffer.len(data) - off), "serializeBytes", "offset and count", "a range inside the buffer") then
+	local cnt = count or (len - (if type(off) == "number" then off else 0))
+	if not needDecl(self, isInteger(off, 0, len) and isInteger(cnt, 0, len - off), "serializeBytes", "offset and count", "a range inside the buffer") then
 		return false
 	end
 	-- a write checks room for the align and the payload together before it

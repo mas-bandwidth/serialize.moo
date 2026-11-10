@@ -116,7 +116,9 @@ max` and `res > 0` or whose `delta` or `delta / res` is not finite in
 float32, precomputed constants whose `bits` is not
 `bitsRequired(0, maxIntegerValue)`, whose `maxIntegerValue` is outside [1,
 4294967040] or whose `delta` is not positive and finite, a string buffer size
-below 1, a bytes range outside its buffer, an object that is not one, and a
+below 1, a bytes range outside its buffer (no buffer, `nil`, holds no bytes, so
+a count of zero with none aligns and copies nothing on every stream), an
+object that is not one, and a
 ReadStream over data that is not a buffer: each is refused as
 `value_out_of_range` through the one latch before any bits move, so a stream
 that already failed keeps its first reason. A value of a type

@@ -161,6 +161,31 @@ function T.TestU7ReaderNeverTraps()
 	end, "offset and count")
 end
 
+-- U7. bytes of zero count with no destination is not misuse on any stream:
+-- it aligns and copies nothing. A positive count with no destination is
+-- refused on read and raises on write and measure.
+function T.TestU7ZeroLengthBytesWithNoDestination()
+	for _, count in { 0, (nil :: any) } do
+		local what = if count == nil then "no count" else "count 0"
+		local w = serialize.WriteStream.new(buffer.create(8))
+		check(w:serializeBits({ value = 5 }, 3), "three bits")
+		check(w:serializeBytes((nil :: any), 0, count) and w:bitsProcessed() == 8, what .. ": a write aligns and copies nothing")
+		w:flush()
+		local r = serialize.ReadStream.new(w:data())
+		local h = { value = 0 }
+		check(r:serializeBits(h, 3) and h.value == 5, "the three bits read back")
+		check(r:serializeBytes((nil :: any), 0, count) and r:bitsProcessed() == 8 and r:ok(), what .. ": a read aligns and copies nothing")
+		local m = serialize.MeasureStream.new()
+		check(m:serializeBytes((nil :: any), 0, count) and m:bitsProcessed() == 7, what .. ": a measure counts the align")
+	end
+	raises(function()
+		serialize.WriteStream.new(buffer.create(8)):serializeBytes((nil :: any), 0, 1)
+	end, "serializeBytes")
+	raises(function()
+		serialize.MeasureStream.new():serializeBytes((nil :: any), 0, 1)
+	end, "serializeBytes")
+end
+
 -- U7. A read holder must be a mutable table: a missing or frozen holder is
 -- refused as value_out_of_range before any bits move, and never raises.
 function T.TestU7ReadHolderMustBeAMutableTable()
