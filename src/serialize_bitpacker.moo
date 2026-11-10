@@ -23,6 +23,8 @@ local RAISE_READ_OVERFLOW = "serialize: bit reader would read past the end of th
 local RAISE_NOT_ALIGNED = "serialize: byte array serialization requires byte alignment"
 local RAISE_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple of 8 bytes"
 local RAISE_READ_DST = "serialize: bit reader destination buffer too small"
+local RAISE_WRITE_BYTES_RANGE = "serialize: writeBytes offset and count must be a range inside the buffer"
+local RAISE_READ_BYTES_RANGE = "serialize: readBytes offset and count must be a range inside the buffer"
 
 -- The state a bit writer or reader carries. A writer sets the scratch and the
 -- written count, a reader the read count; the metatable supplies the methods.
@@ -48,6 +50,21 @@ local function isBits(bits: any): boolean
 	return type(bits) == "number" and bits >= 1 and bits <= 32 and bits == math.floor(bits)
 end
 
+local function isInteger(x: any, lo: number, hi: number): boolean
+	return type(x) == "number" and x >= lo and x <= hi and x == math.floor(x)
+end
+
+-- bytesRange returns offset and count, defaulted, after checking that they
+-- select a span inside buf, as serializeBytes checks them before it aligns.
+local function bytesRange(buf: buffer, offset: any, count: any, message: string): (number, number)
+	local off = offset or 0
+	local cnt = count or (buffer.len(buf) - (if type(off) == "number" then off else 0))
+	if not (isInteger(off, 0, buffer.len(buf)) and isInteger(cnt, 0, buffer.len(buf) - off)) then
+		error(message, 3)
+	end
+	return off, cnt
+end
+
 -- ---------------------------------------------------------------------------
 -- BitWriter
 
@@ -67,7 +84,7 @@ function BitWriter.reset(self: BitState, buf: buffer)
 	self._bitsWritten = 0
 end
 
-function BitWriter.new(buf: buffer): any
+function BitWriter.new(buf: buffer): BitState
 	local self = setmetatable({}, BitWriter)
 	self:reset(buf)
 	return self
@@ -133,10 +150,9 @@ end
 
 -- writeBytes copies count bytes of src from offset into an ALIGNED stream;
 -- offset and count extend Go's []byte (a buffer has no slices) and default to
--- 0 and the buffer's length.
+-- 0 and the rest of the buffer.
 function BitWriter.writeBytes(self: BitState, src: buffer, offset: number?, count: number?)
-	local off = offset or 0
-	local cnt = count or buffer.len(src)
+	local off, cnt = bytesRange(src, offset, count, RAISE_WRITE_BYTES_RANGE)
 	if self._bitsWritten % 8 ~= 0 then
 		error(RAISE_NOT_ALIGNED, 2)
 	end
@@ -196,7 +212,7 @@ function BitReader.reset(self: BitState, data: buffer)
 	self._bitsRead = 0
 end
 
-function BitReader.new(data: buffer): any
+function BitReader.new(data: buffer): BitState
 	local self = setmetatable({}, BitReader)
 	self:reset(data)
 	return self
@@ -261,8 +277,7 @@ end
 
 -- readBytes reads count bytes from an ALIGNED stream into dst at offset.
 function BitReader.readBytes(self: BitState, dst: buffer, offset: number?, count: number?)
-	local off = offset or 0
-	local cnt = count or buffer.len(dst)
+	local off, cnt = bytesRange(dst, offset, count, RAISE_READ_BYTES_RANGE)
 	if self._bitsRead % 8 ~= 0 then
 		error(RAISE_NOT_ALIGNED, 2)
 	end

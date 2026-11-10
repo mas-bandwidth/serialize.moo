@@ -620,6 +620,7 @@ meta.__tostring = function(f: any): string
 	return string.format("Float32(0x%08X)", f.bits)
 end
 
+table.freeze(meta)
 F.Float32 = table.freeze(Float32)
 
 -- toFloat32Bits(x): the binary32 bits of a parameter given as a Float32 or an

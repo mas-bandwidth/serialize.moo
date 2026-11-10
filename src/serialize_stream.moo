@@ -45,8 +45,8 @@ export type StreamState = {
 	_error: any,
 	_context: any,
 	_data: buffer,
-	_packer: any,
-	_reader: any,
+	_packer: Bitpacker.BitState,
+	_reader: Bitpacker.BitState,
 	[string]: any,
 }
 
@@ -156,6 +156,15 @@ end
 local function needDecl(s: StreamState, cond: boolean, method: string, name: string, kind: string): boolean
 	if not cond then
 		return misuse(s, "serialize: " .. method .. " " .. name .. " must be " .. kind, 3)
+	end
+	return true
+end
+
+-- holderArg: a read's holder must be a mutable table, checked before any bit
+-- moves (U7); a write or a measure checks the value it is handed itself.
+local function holderArg(s: StreamState, h: any): boolean
+	if s._kind == "read" and (type(h) ~= "table" or table.isfrozen(h)) then
+		return misuse(s, "serialize: the holder must be a mutable table", 3)
 	end
 	return true
 end
@@ -303,22 +312,6 @@ end
 -- ---------------------------------------------------------------------------
 -- bits, bool and the fixed-width unsigned integers (STANDARD.md bits, bool).
 
--- fixedWidth runs a no-parameter method of width n: write the masked value,
--- read it, or measure n.
-local function fixedWidth(s: StreamState, n: number, writeValue: () -> number): (boolean, number?)
-	if s._error ~= nil then
-		return false, nil
-	end
-	if not s:_room(n) then
-		return s:_fail(PAST_END), nil
-	end
-	if s._kind == "read" then
-		return true, s:_get(n)
-	end
-	s:_put(writeValue(), n)
-	return true, nil
-end
-
 function Shared.serializeBits(self: StreamState, h: any, bits: number): boolean
 	if not bitsArg(self, bits, 32, RAISE_BITS_RANGE) then
 		return false
@@ -328,13 +321,21 @@ function Shared.serializeBits(self: StreamState, h: any, bits: number): boolean
 		-- measure checks what a write checks (U6)
 		uintArg(h.value, bits, "serializeBits", "value")
 	end
-	local ok, v = fixedWidth(self, bits, function()
-		return bit32.band(h.value, MASK[bits])
-	end)
-	if ok and v ~= nil then
-		h.value = v
+	if not holderArg(self, h) then
+		return false
 	end
-	return ok
+	if self._error ~= nil then
+		return false
+	end
+	if not self:_room(bits) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind == "read" then
+		h.value = self:_get(bits)
+	else
+		self:_put(bit32.band(h.value, MASK[bits]), bits)
+	end
+	return true
 end
 
 function Shared.serializeBits64(self: StreamState, h: any, bits: number): boolean
@@ -346,6 +347,9 @@ function Shared.serializeBits64(self: StreamState, h: any, bits: number): boolea
 		limbs = wideArg(Uint64, h.value, "serializeBits64", "value")
 		-- the value must fit its width: masking is not checking (U8)
 		need(Wide.bitLen(limbs, 2) <= bits, "serializeBits64", "value", "a uint" .. bits)
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	if self._error ~= nil then
 		return false
@@ -365,13 +369,21 @@ function Shared.serializeBool(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "boolean", "serializeBool", "value", "a boolean")
 	end
-	local ok, v = fixedWidth(self, 1, function()
-		return if h.value then 1 else 0
-	end)
-	if ok and v ~= nil then
-		h.value = v ~= 0
+	if not holderArg(self, h) then
+		return false
 	end
-	return ok
+	if self._error ~= nil then
+		return false
+	end
+	if not self:_room(1) then
+		return self:_fail(PAST_END)
+	end
+	if self._kind == "read" then
+		h.value = self:_get(1) ~= 0
+	else
+		self:_put(if h.value then 1 else 0, 1)
+	end
+	return true
 end
 
 local function uintMethod(bits: number, name: string)
@@ -379,13 +391,21 @@ local function uintMethod(bits: number, name: string)
 		if self._kind ~= "read" then
 			uintArg(h.value, bits, name, "value")
 		end
-		local ok, v = fixedWidth(self, bits, function()
-			return h.value
-		end)
-		if ok and v ~= nil then
-			h.value = v
+		if not holderArg(self, h) then
+			return false
 		end
-		return ok
+		if self._error ~= nil then
+			return false
+		end
+		if not self:_room(bits) then
+			return self:_fail(PAST_END)
+		end
+		if self._kind == "read" then
+			h.value = self:_get(bits)
+		else
+			self:_put(h.value, bits)
+		end
+		return true
 	end
 end
 
@@ -399,6 +419,9 @@ local function wideFixed(C: any, bits: number, name: string)
 		local limbs: { number }
 		if self._kind ~= "read" then
 			limbs = wideArg(C, h.value, name, "value")
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		if self._error ~= nil then
 			return false
@@ -446,6 +469,9 @@ function Shared.serializeInt(self: StreamState, h: any, min: number, max: number
 		self:_put(v - min, bits)
 		return true
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -487,6 +513,9 @@ local function ranged(C: any, name: string)
 			end
 			self:_putWide(Wide.sub(v, lo, n), bits)
 			return true
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		if self._error ~= nil then
 			return false
@@ -592,6 +621,9 @@ local function fixedMethod(C: any, width: number, name: string)
 			self:_putWide(offset, bits)
 			return true
 		end
+		if not holderArg(self, h) then
+			return false
+		end
 		if self._error ~= nil then
 			return false
 		end
@@ -626,6 +658,9 @@ function Shared.serializeFixedNumber(self: StreamState, h: any, min: any, max: a
 	end
 	if Wide.cmpS(maxLimbs, MAX_NUMBER_UNITS, 2) > 0 then
 		return misuse(self, "serialize: serializeFixedNumber max must be at most 2^47 - 1 whole units, the largest moo integer", 2)
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	local raw: any = nil
 	if self._kind ~= "read" then
@@ -705,6 +740,9 @@ function Shared.serializeIntRelative(self: StreamState, previous: number, h: any
 		end
 		return self:serializeBits({ value = current }, 32)
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -783,6 +821,9 @@ function Shared.serializeFloatBits(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		uintArg(h.value, 32, "serializeFloatBits", "value")
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -808,6 +849,9 @@ function Shared.serializeDoubleBits(self: StreamState, h: any): boolean
 	local limbs: { number }
 	if self._kind ~= "read" then
 		limbs = wideArg(Uint64, h.value, "serializeDoubleBits", "value")
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	if self._error ~= nil then
 		return false
@@ -835,6 +879,9 @@ function Shared.serializeFloat(self: StreamState, h: any): boolean
 		need(type(h.value) == "number", "serializeFloat", "value", "a number")
 		return Shared.serializeFloatBits(self, { value = Float.toFloatBits(h.value) })
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	local bits = { value = 0 }
 	if not Shared.serializeFloatBits(self, bits) then
 		return false
@@ -852,6 +899,9 @@ function Shared.serializeDouble(self: StreamState, h: any): boolean
 		need(type(h.value) == "number", "serializeDouble", "value", "a number")
 		local lo, hi = Float.toDoubleBits(h.value)
 		return Shared.serializeDoubleBits(self, { value = Uint64._wrap({ lo, hi }) })
+	end
+	if not holderArg(self, h) then
+		return false
 	end
 	local bits: any = { value = nil }
 	if not Shared.serializeDoubleBits(self, bits) then
@@ -1015,6 +1065,9 @@ local function compressedMethod(asBits: boolean, precomputed: boolean, name: str
 				error(RAISE_DECLARATION_FINITE, 2)
 			end
 			maxIntegerValue = m
+		end
+		if not holderArg(self, h) then
+			return false
 		end
 		local valueBits = compressedValue(self, h, asBits, name)
 		local ok, decoded = compressed(self, valueBits, maxIntegerValue, bits, delta, min)
@@ -1200,6 +1253,9 @@ function Shared.serializeString(self: StreamState, h: any, bufferSize: number): 
 		self._bits += #s * 8
 		return true
 	end
+	if not holderArg(self, h) then
+		return false
+	end
 	if self._error ~= nil then
 		return false
 	end
@@ -1343,7 +1399,7 @@ end
 local WriteStream = class()
 
 -- new(buffer): the buffer's size must be a multiple of 8 bytes.
-function WriteStream.new(buf: buffer): any
+function WriteStream.new(buf: buffer): StreamState
 	local self = setmetatable({ _kind = "write", _context = nil }, WriteStream)
 	self:reset(buf)
 	return self
@@ -1381,7 +1437,7 @@ end
 
 local ReadStream = class()
 
-function ReadStream.new(data: buffer): any
+function ReadStream.new(data: buffer): StreamState
 	local self = setmetatable({ _kind = "read", _context = nil }, ReadStream)
 	self:reset(data)
 	return self
@@ -1407,7 +1463,7 @@ end
 
 local MeasureStream = class()
 
-function MeasureStream.new(): any
+function MeasureStream.new(): StreamState
 	local self = setmetatable({ _kind = "measure", _context = nil }, MeasureStream)
 	self:reset()
 	return self

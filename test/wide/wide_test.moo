@@ -29,6 +29,34 @@ function T.TestParseAndPrint()
 	check(not pcall(Uint64.parse, "12x"), "a bad digit raises")
 end
 
+function T.TestParseBounds()
+	eq(Int64.parse("9223372036854775807"), "9223372036854775807", "Int64 decimal max")
+	eq(Int64.parse("-9223372036854775808"), "-9223372036854775808", "Int64 decimal min")
+	check(not pcall(Int64.parse, "9223372036854775808"), "Int64 decimal above max raises")
+	check(not pcall(Int64.parse, "-9223372036854775809"), "Int64 decimal below min raises")
+	eq(Int64.parse("0xFFFFFFFFFFFFFFFF"), "-1", "Int64 hex max pattern wraps to -1")
+	eq(Int64.parse("0x10000000000000000"), "0", "Int64 hex above the width wraps")
+
+	eq(Uint64.parse("18446744073709551615"), "18446744073709551615", "Uint64 decimal max")
+	check(not pcall(Uint64.parse, "18446744073709551616"), "Uint64 decimal above max raises")
+	check(not pcall(Uint64.parse, "-18446744073709551616"), "Uint64 negative decimal below -max raises")
+	eq(Uint64.parse("0xFFFFFFFFFFFFFFFF"), "18446744073709551615", "Uint64 hex max pattern")
+	eq(Uint64.parse("0x10000000000000000"), "0", "Uint64 hex above the width wraps")
+
+	eq(Int128.parse("170141183460469231731687303715884105727"), "170141183460469231731687303715884105727", "Int128 decimal max")
+	eq(Int128.parse("-170141183460469231731687303715884105728"), "-170141183460469231731687303715884105728", "Int128 decimal min")
+	check(not pcall(Int128.parse, "170141183460469231731687303715884105728"), "Int128 decimal above max raises")
+	check(not pcall(Int128.parse, "-170141183460469231731687303715884105729"), "Int128 decimal below min raises")
+	eq(Int128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"), "-1", "Int128 hex max pattern wraps to -1")
+	eq(Int128.parse("0x100000000000000000000000000000000"), "0", "Int128 hex above the width wraps")
+
+	eq(Uint128.parse("340282366920938463463374607431768211455"), "340282366920938463463374607431768211455", "Uint128 decimal max")
+	check(not pcall(Uint128.parse, "340282366920938463463374607431768211456"), "Uint128 decimal above max raises")
+	check(not pcall(Uint128.parse, "-340282366920938463463374607431768211456"), "Uint128 negative decimal below -max raises")
+	eq(Uint128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"), "340282366920938463463374607431768211455", "Uint128 hex max pattern")
+	eq(Uint128.parse("0x100000000000000000000000000000000"), "0", "Uint128 hex above the width wraps")
+end
+
 function T.TestArithmeticWraps()
 	eq(Int64.parse("9223372036854775807") + 1, "-9223372036854775808", "INT64_MAX + 1 wraps")
 	eq(Uint64.fromNumber(0) - 1, "18446744073709551615", "0 - 1 wraps")
@@ -145,6 +173,56 @@ function T.TestBitwise()
 	eq(Int128.band(-1, Int128.parse("0x1FFFFFFFFFFFFFFFF")), "36893488147419103231", "int128 band with -1 is the other")
 	eq(Int128.bxor(-1, Int128.parse("170141183460469231731687303715884105727")), "-170141183460469231731687303715884105728", "int128 bxor flips the sign bit")
 	eq(Int128.bor(Int128.lsh(1, 96), Int128.lsh(1, 32)), "79228162514264337597838917632", "int128 bor joins limbs 1 and 3")
+end
+
+-- eq compares a wide value with a wide value, and a wide value with a number.
+function T.TestEq()
+	check(Int64.eq(Int64.parse("-9223372036854775808"), Int64.parse("-9223372036854775808")), "int64 wide equals wide")
+	check(not Int64.eq(Int64.parse("-9223372036854775808"), Int64.fromNumber(0)), "int64 wide differs from wide")
+	check(Int64.eq(Int64.fromNumber(-1), -1), "int64 wide equals a number")
+	check(Int64.eq(-1, Int64.fromNumber(-1)), "int64 number equals wide")
+	check(not Int64.eq(Int64.fromNumber(-1), 0), "int64 wide differs from a number")
+
+	check(Uint64.eq(Uint64.parse("18446744073709551615"), Uint64.parse("0xFFFFFFFFFFFFFFFF")), "uint64 wide equals wide")
+	check(not Uint64.eq(Uint64.parse("18446744073709551615"), Uint64.fromNumber(0)), "uint64 wide differs from wide")
+	check(Uint64.eq(Uint64.fromNumber(0), 0), "uint64 wide equals a number")
+	check(Uint64.eq(0, Uint64.fromNumber(0)), "uint64 number equals wide")
+	check(not Uint64.eq(Uint64.fromNumber(1), 0), "uint64 wide differs from a number")
+
+	check(Int128.eq(Int128.parse("-170141183460469231731687303715884105728"), Int128.parse("-170141183460469231731687303715884105728")), "int128 wide equals wide")
+	check(not Int128.eq(Int128.parse("-170141183460469231731687303715884105728"), Int128.fromNumber(0)), "int128 wide differs from wide")
+	check(Int128.eq(Int128.fromNumber(5), 5), "int128 wide equals a number")
+	check(Int128.eq(5, Int128.fromNumber(5)), "int128 number equals wide")
+	check(not Int128.eq(Int128.fromNumber(5), 6), "int128 wide differs from a number")
+
+	check(Uint128.eq(Uint128.parse("340282366920938463463374607431768211455"), Uint128.parse("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")), "uint128 wide equals wide")
+	check(not Uint128.eq(Uint128.parse("340282366920938463463374607431768211455"), Uint128.fromNumber(0)), "uint128 wide differs from wide")
+	check(Uint128.eq(Uint128.fromNumber(7), 7), "uint128 wide equals a number")
+	check(Uint128.eq(7, Uint128.fromNumber(7)), "uint128 number equals wide")
+	check(not Uint128.eq(Uint128.fromNumber(7), 8), "uint128 wide differs from a number")
+end
+
+-- The class tables and the metatables their values share are frozen: an
+-- assignment to either raises.
+local function frozen(name: string, class: any, value: any)
+	local meta: any = getmetatable(value)
+	check(not pcall(function()
+		class.notAFunction = 1
+	end), name .. " class table is frozen")
+	check(not pcall(function()
+		meta.notAFunction = 1
+	end), name .. " metatable is frozen")
+end
+
+function T.TestWideClassesFrozen()
+	frozen("Uint64", Uint64, Uint64.fromNumber(0))
+	frozen("Int64", Int64, Int64.fromNumber(0))
+	frozen("Uint128", Uint128, Uint128.fromNumber(0))
+	frozen("Int128", Int128, Int128.fromNumber(0))
+end
+
+function T.TestFloat32Frozen()
+	frozen("Float32", serialize.Float32, serialize.Float32.fromNumber(0))
 end
 
 return T
