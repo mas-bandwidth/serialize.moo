@@ -7,6 +7,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -114,7 +115,7 @@ jobs:
     timeout-minutes: 5
     env:
       # A tag or a full commit.
-      SERIALIZE_REF: v2.1.1
+      SERIALIZE_REF: v2.1.3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,3 +137,43 @@ jobs:
           diff -ru "$RUNNER_TEMP/serialize/conformance-controls" conformance-controls
           diff -u "$RUNNER_TEMP/serialize/STANDARD.md" STANDARD.md
           diff -u "$RUNNER_TEMP/serialize/IMPLEMENTING.md" IMPLEMENTING.md
+
+  test-arm64:
+    name: test on the pinned moo (ARM64)
+    # The repository is public and these are the fleet's self-hosted runners:
+    # a pull request from a fork never runs on them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, fleet]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The pin lives once, in the Makefile; the cache key is derived from it.
+      - name: Read the moo pin from the Makefile
+        id: pin
+        run: |
+          pin=$(sed -n 's/^MOO_PIN[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)
+          test -n "$pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dist/moo
+        uses: actions/cache@v4
+        with:
+          path: dist/moo
+          key: moo-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.pin }}
+
+      # dist-moo refuses a checkout that is not the pin; a cached dist/moo
+      # whose PIN file is the pin is used as it is
+      - name: Build the pinned moo
+        run: |
+          if [ "$(cat dist/moo/PIN 2>/dev/null)" != "${{ steps.pin.outputs.pin }}" ]; then make dist-moo JOBS=4; fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/moorun/go.mod
+          cache: false
+
+      - name: Test
+        run: make test

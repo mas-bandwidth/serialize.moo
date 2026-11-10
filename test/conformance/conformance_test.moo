@@ -297,7 +297,7 @@ local stats = { numberForm = 0, numberRefused = 0, fixedNumber = 0 }
 -- that writes any value at all (min, 0, the decoded value) is seen
 local UNWRITTEN = table.freeze({})
 
-local function scalar(rec: any, r: any, read: (any, any) -> boolean, _initial: () -> any, equal: (any) -> boolean, write: ((any) -> boolean)?)
+local function scalar(rec: any, r: any, read: (any, any) -> boolean, equal: (any) -> boolean, write: ((any) -> boolean)?)
 	local h = { value = UNWRITTEN }
 	local ok = read(r, h)
 	if rec.expect.refused then
@@ -323,8 +323,6 @@ RUN.bits = function(rec: any, r: any)
 		local want = if rec.expect.refused then 0 else tonumber(rec.expect.value) :: number
 		scalar(rec, r, function(s, h)
 			return s:serializeBits(h, bits)
-		end, function()
-			return 0
 		end, function(v)
 			return v == want
 		end, function(w)
@@ -332,11 +330,8 @@ RUN.bits = function(rec: any, r: any)
 		end)
 	else
 		local want = if rec.expect.refused then Uint64.fromNumber(0) else Uint64.parse(rec.expect.value)
-		local zero = Uint64.fromNumber(0)
 		scalar(rec, r, function(s, h)
 			return s:serializeBits64(h, bits)
-		end, function()
-			return zero
 		end, function(v)
 			return v == want
 		end, function(w)
@@ -349,8 +344,6 @@ RUN.bool = function(rec: any, r: any)
 	local want = not rec.expect.refused and rec.expect.value == "true"
 	scalar(rec, r, function(s, h)
 		return s:serializeBool(h)
-	end, function()
-		return false
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -380,8 +373,6 @@ local function rangedRunner(C: any, method: string)
 		local want = if rec.expect.refused then min else C.parse(rec.expect.value)
 		scalar(rec, r, function(s, h)
 			return s[method](s, h, min, max)
-		end, function()
-			return min
 		end, function(v)
 			return v == want
 		end, function(w)
@@ -395,8 +386,6 @@ RUN.int = function(rec: any, r: any)
 	local want = if rec.expect.refused then min else tonumber(rec.expect.value) :: number
 	scalar(rec, r, function(s, h)
 		return s:serializeInt(h, min, max)
-	end, function()
-		return min
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -412,8 +401,6 @@ RUN.uint128 = function(rec: any, r: any)
 	local want = if rec.expect.refused then zero else Uint128.parse(rec.expect.value)
 	scalar(rec, r, function(s, h)
 		return s:serializeUint128(h)
-	end, function()
-		return zero
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -452,8 +439,6 @@ RUN.float = function(rec: any, r: any)
 	local want = if rec.expect.refused then 0 else hex32(rec.expect.value)
 	scalar(rec, r, function(s, h)
 		return s:serializeFloatBits(h)
-	end, function()
-		return 0
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -469,8 +454,6 @@ RUN.double = function(rec: any, r: any)
 	local want = if rec.expect.refused then zero else hex64(rec.expect.value)
 	scalar(rec, r, function(s, h)
 		return s:serializeDoubleBits(h)
-	end, function()
-		return zero
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -486,8 +469,6 @@ RUN.compressed_float = function(rec: any, r: any)
 	local want = if rec.expect.refused then 0 else hex32(rec.expect.value)
 	scalar(rec, r, function(s, h)
 		return s:serializeCompressedFloatBits(h, min, max, res)
-	end, function()
-		return 0
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -544,8 +525,6 @@ RUN.string = function(rec: any, r: any)
 	local want = if rec.expect.refused then "" else buffer.tostring(toBuffer(splitHex(rec.expect.value)))
 	scalar(rec, r, function(s, h)
 		return s:serializeString(h, bufferSize)
-	end, function()
-		return "UNTOUCHED"
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -576,8 +555,6 @@ RUN.int_relative = function(rec: any, r: any)
 	local want = if rec.expect.refused then -1 else tonumber(rec.expect.value) :: number
 	scalar(rec, r, function(s, h)
 		return s:serializeIntRelative(previous, h)
-	end, function()
-		return -1
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -595,8 +572,6 @@ RUN.fixed = function(rec: any, r: any)
 	local want = if rec.expect.refused then zero else C.parse(rec.expect.value)
 	scalar(rec, r, function(s, h)
 		return s[method](s, h, ib, fb, min, max)
-	end, function()
-		return zero
 	end, function(v)
 		return v == want
 	end, function(w)
@@ -962,7 +937,7 @@ local function corpus(): { any }
 	return recordsOf(inputs, corpusNames())
 end
 
-local CORPUS_SIZE = 413 -- serialize v2.1.0
+local CORPUS_SIZE = 413 -- serialize v2.1.3
 
 if inputs.CONTROL ~= nil then
 	-- control mode: the vectors that fail are exactly the .expected list
@@ -1021,7 +996,7 @@ function T.TestConformanceCorpus()
 	print("  conformance: " .. #records .. " vectors in " .. #names .. " files, all passed, every refusal for its stated reason")
 	print("  number form: " .. stats.numberForm .. " float, double and compressed_float vectors re-run across the boundary, " .. stats.numberRefused .. " finite ones refused by it (no moo number)")
 	print("  fixed number: " .. stats.fixedNumber .. " Q48.16 vectors re-run as moo numbers")
-	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.1.0 has " .. CORPUS_SIZE)
+	check(#records >= CORPUS_SIZE, "the corpus shrank: " .. #records .. " vectors, v2.1.3 has " .. CORPUS_SIZE)
 end
 
 -- The first control (STANDARD.md): conformance-controls/unknown-operation.txt

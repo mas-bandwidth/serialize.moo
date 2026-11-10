@@ -247,6 +247,174 @@ function T.TestFixedNumberIsQ48_16()
 	check(r:error() == E.ValueOutOfRange, "refused as out of range")
 end
 
+-- Q48.16 over [-2^47, 0] whole units: offset 0 is raw -2^63, the one Q48.16
+-- pattern with no moo number, so a read refuses it through the stream, the
+-- holder untouched; offset 1 is the least moo number
+function T.TestFixedNumberRawMinThroughTheStream()
+	local min = Int64.parse("-140737488355328")
+	local r = serialize.ReadStream.new(buffer.create(8))
+	local h = { value = 777 }
+	check(not r:serializeFixedNumber(h, min, 0), "raw -2^63 is refused")
+	check(r:error() == E.ValueOutOfRange and h.value == 777, "refused as value_out_of_range, the holder untouched")
+	local r1 = serialize.ReadStream.new(buffer.fromstring("\x01\x00\x00\x00\x00\x00\x00\x00"))
+	local h1 = { value = 777 }
+	check(r1:serializeFixedNumber(h1, min, 0) and h1.value == -140737488355327.99998, "raw -(2^63 - 1) reads as the least moo number")
+	check(r1:bitsProcessed() == 64, "[-2^47, 0] in Q48.16 is 64 bits")
+end
+
+-- the typed conveniences write the bytes of their twin forms after every
+-- prefix of 0 through 63 bits, and read back across the twin's wire:
+-- serializeFixedNumber and serializeFixed64(raw, 48, 16), bounds and values
+-- given as numbers and as wide integers, the precomputed compressed float and
+-- the plain one
+function T.TestConveniencesMatchTwinsAtEveryOffset()
+	local maxInt, cfBits, delta = serialize.compressedFloatParams(-10, 10, Float32.parse("0.01"))
+	local twins: { { any } } = {
+		{
+			"fixed number",
+			function(s: any, h: any) return s:serializeFixedNumber(h, -10, 10) end,
+			function(s: any, h: any) return s:serializeFixed64(h, 48, 16, -10, 10) end,
+			3.25, Int64.fromNumberRaw(3.25), 3.25,
+		},
+		{
+			"int64 number bounds",
+			function(s: any, h: any) return s:serializeInt64(h, -1000, 1000) end,
+			function(s: any, h: any) return s:serializeInt64(h, Int64.fromNumber(-1000), Int64.fromNumber(1000)) end,
+			-5, Int64.fromNumber(-5), Int64.fromNumber(-5),
+		},
+		{
+			"int128 number bounds",
+			function(s: any, h: any) return s:serializeInt128(h, -1000, 1000) end,
+			function(s: any, h: any) return s:serializeInt128(h, Int128.fromNumber(-1000), Int128.fromNumber(1000)) end,
+			-5, Int128.fromNumber(-5), Int128.fromNumber(-5),
+		},
+		{
+			"fixed64 number bounds",
+			function(s: any, h: any) return s:serializeFixed64(h, 16, 16, -100, 100) end,
+			function(s: any, h: any) return s:serializeFixed64(h, 16, 16, Int64.fromNumber(-100), Int64.fromNumber(100)) end,
+			-6553600, Int64.fromNumber(-6553600), Int64.fromNumber(-6553600),
+		},
+		{
+			"precomputed compressed float",
+			function(s: any, h: any) return s:serializeCompressedFloatPrecomputed(h, maxInt, cfBits, delta, -10) end,
+			function(s: any, h: any) return s:serializeCompressedFloat(h, -10, 10, Float32.parse("0.01")) end,
+			2.5, 2.5, 2.5,
+		},
+	}
+	for prefix = 0, 63 do
+		local first = math.min(prefix, 32)
+		local second = prefix - first
+		local v1 = if first > 0 then bit32.band(0x13579BDF, 2 ^ first - 1) else 0
+		local v2 = if second > 0 then bit32.band(0x6AC0F135, 2 ^ second - 1) else 0
+		local function lead(s: any, where: string)
+			local p1, p2 = { value = v1 }, { value = v2 }
+			if first > 0 then
+				check(s:serializeBits(p1, first) and p1.value == v1, where .. ": prefix")
+			end
+			if second > 0 then
+				check(s:serializeBits(p2, second) and p2.value == v2, where .. ": prefix")
+			end
+		end
+		for _, t in twins do
+			local name: string, a: (any, any) -> boolean, b: (any, any) -> boolean = t[1], t[2], t[3]
+			local where = string.format("%s at prefix %d", name, prefix)
+			local function write(form: (any, any) -> boolean, value: any): (buffer, number)
+				local w = serialize.WriteStream.new(buffer.create(32))
+				lead(w, where)
+				check(form(w, { value = value }), where .. ": the write")
+				w:flush()
+				return w:data(), w:bitsProcessed()
+			end
+			local wireA, bitsA = write(a, t[4])
+			local wireB, bitsB = write(b, t[5])
+			check(bitsA == bitsB, where .. ": " .. bitsA .. " bits vs " .. bitsB)
+			check(buffer.tostring(wireA) == buffer.tostring(wireB), where .. ": the same wire")
+			local ra = serialize.ReadStream.new(wireB)
+			lead(ra, where)
+			local ha = { value = nil }
+			check(a(ra, ha) and ha.value == t[6] and ra:bitsProcessed() == bitsA, where .. ": the convenience reads the twin's wire, got " .. tostring(ha.value))
+			local rb = serialize.ReadStream.new(wireA)
+			lead(rb, where)
+			local hb = { value = nil }
+			check(b(rb, hb) and hb.value == t[5] and rb:bitsProcessed() == bitsB, where .. ": the twin reads the convenience's wire, got " .. tostring(hb.value))
+		end
+	end
+end
+
+-- a write goes on after flush: flush stores the partial word without moving
+-- the stream, so a later write and a second flush give the bytes of one
+-- uninterrupted write
+function T.TestWriteAfterFlush()
+	local once = serialize.WriteStream.new(buffer.create(16))
+	check(once:serializeBits({ value = 0xABC }, 12) and once:serializeBits({ value = 0x12345 }, 20) and once:serializeBits({ value = 0x2F }, 7), "one run")
+	once:flush()
+	local twice = serialize.WriteStream.new(buffer.create(16))
+	check(twice:serializeBits({ value = 0xABC }, 12), "before the first flush")
+	twice:flush()
+	check(twice:bitsProcessed() == 12 and twice:bitsAvailable() == 116, "flush moves nothing")
+	check(twice:serializeBits({ value = 0x12345 }, 20), "after the first flush")
+	twice:flush()
+	check(twice:serializeBits({ value = 0x2F }, 7), "after the second flush, into the next word")
+	twice:flush()
+	check(twice:bitsProcessed() == 39, "39 bits")
+	check(buffer.tostring(twice:data()) == buffer.tostring(once:data()), "the bytes of one uninterrupted write")
+end
+
+-- bitsAvailable: the room left in a write buffer, in bits
+function T.TestBitsAvailable()
+	local w = serialize.WriteStream.new(buffer.create(16))
+	check(w:bitsAvailable() == 128, "a fresh 16-byte buffer has 128 bits")
+	check(w:serializeBits({ value = 5 }, 13) and w:bitsAvailable() == 115, "13 bits taken")
+	check(w:serializeUint64({ value = Uint64.fromNumber(1) }) and w:bitsAvailable() == 51, "64 more")
+	raises(function()
+		w:serializeUint64({ value = Uint64.fromNumber(1) })
+	end, "does not fit the room left")
+	check(w:bitsAvailable() == 51, "a write past the room takes none")
+	check(w:serializeBits64({ value = Uint64.fromNumber(0) }, 51) and w:bitsAvailable() == 0, "the last 51 bits")
+	w:reset(buffer.create(8))
+	check(w:bitsAvailable() == 64, "reset to an 8-byte buffer has 64 bits")
+end
+
+-- setContext / context: the caller's value, by reference, on every stream,
+-- reachable from inside a nested object
+function T.TestContext()
+	for _, s in { serialize.WriteStream.new(buffer.create(8)), serialize.ReadStream.new(buffer.create(8)), serialize.MeasureStream.new() } do
+		check(s:context() == nil, "no context until one is set")
+		local ctx = { limit = 3 }
+		s:setContext(ctx)
+		check(s:context() == ctx, "the same table back")
+		local seen: any = nil
+		check(s:serializeObject({ serialize = function(_self: any, inner: any): boolean
+			seen = inner:context()
+			return true
+		end }), "the object serializes")
+		check(seen == ctx, "a nested object sees the context")
+		s:setContext(nil)
+		check(s:context() == nil, "cleared")
+	end
+end
+
+-- Float32.fromNumber / toNumber: the float32 nearest a number, and the number
+-- for a float32 by the boundary rule, nil when it has none
+function T.TestFloat32Numbers()
+	for _, c in { { 0, 0x00000000 }, { 1, 0x3F800000 }, { -2.5, 0xC0200000 }, { 0.5, 0x3F000000 }, { -123.25, 0xC2F68000 }, { 65536, 0x47800000 }, { 1 / 65536, 0x37800000 } } do
+		local f = Float32.fromNumber(c[1])
+		check(f == Float32.fromBits(c[2]), string.format("fromNumber(%s) is %s, want 0x%08X", tostring(c[1]), tostring(f), c[2]))
+		check(Float32.toNumber(f) == c[1], "toNumber of fromNumber(" .. tostring(c[1]) .. ") comes back")
+	end
+	-- 2^24 + 1 has no float32: ties to even, down to 2^24
+	check(Float32.fromNumber(16777217) == Float32.fromBits(0x4B800000), "2^24 + 1 rounds to 2^24")
+	check(Float32.toNumber(Float32.fromBits(0x80000000)) == 0, "-0 is 0")
+	check(Float32.toNumber(Float32.parse("0.01")) == 655 / 65536, "0.01f is 655 units")
+	check(Float32.toNumber(Float32.fromBits(0x00000001)) == 0, "the least subnormal rounds to 0")
+	for _, bits in { 0x7F800000, 0xFF800000, 0x7FC00000, 0x7F7FFFFF } do
+		check(Float32.toNumber(Float32.fromBits(bits)) == nil, string.format("0x%08X has no number", bits))
+	end
+	raises(function()
+		Float32.fromNumber("1" :: any)
+	end, "Float32.fromNumber requires a number")
+end
+
 -- strings: the reader refuses a zero byte as embedded_nul BEFORE it checks
 -- the encoding, and malformed UTF-8 as invalid_utf8, the way Go's utf8.Valid
 -- does; it checks the claimed length against the bytes that remain before it
@@ -413,7 +581,7 @@ end
 -- the float forms (STANDARD.md, Finite values only): a number crosses the
 -- boundary; the Bits forms carry every FINITE pattern (-0, subnormals, values
 -- past every moo number), and a non-finite one is refused on read as
--- non_finite_float, the holder untouched, and latched on write. The reversed
+-- non_finite_float, the holder untouched, and traps on write. The reversed
 -- witness: under format 1.1 a signalling NaN's payload travelled through the
 -- Bits form; now it is refused both ways.
 function T.TestFloatForms()
@@ -432,7 +600,7 @@ function T.TestFloatForms()
 		local got = { value = 0 }
 		check(serialize.ReadStream.new(w2:data()):serializeFloatBits(got) and got.value == bits, string.format("0x%08X reads back exactly", bits))
 	end
-	-- non-finite patterns: refused on read, latched on write and on measure
+	-- non-finite patterns: refused on read, trapped on write and on measure
 	local function le32(bits: number): buffer
 		local b = buffer.create(4)
 		buffer.writeu32(b, 0, bits)
