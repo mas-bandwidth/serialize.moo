@@ -34,6 +34,22 @@ local Uint64, Int64, Uint128, Int128 = Wide.Uint64, Wide.Int64, Wide.Uint128, Wi
 
 export type Holder<T> = { value: T }
 
+-- The state every stream carries, whichever of the three kinds it is. A write
+-- holds the destination buffer and its packer, a read its reader; only the
+-- fields its kind uses are set. The kind-specific members are reached through
+-- the metatable the class installs, so the index signature keeps them open.
+export type StreamState = {
+	_kind: string,
+	_bits: number,
+	_numBits: number,
+	_error: any,
+	_context: any,
+	_data: buffer,
+	_packer: any,
+	_reader: any,
+	[string]: any,
+}
+
 -- The refusal reasons (STANDARD.md, Refusal reasons): a closed list, spelled
 -- exactly as every implementation spells them. A read stream latches the FIRST
 -- refusal's reason; later refusals on a failed stream are its echoes. Write
@@ -121,7 +137,7 @@ end
 -- failed keeps its first reason, and returns false; on a write or a measure it
 -- raises message (moo's one write-misuse mechanism, U9), level counted from
 -- misuse's caller as error counts it.
-local function misuse(s: any, message: string, level: number): boolean
+local function misuse(s: StreamState, message: string, level: number): boolean
 	if s._kind == "read" then
 		return s:_fail(RANGE)
 	end
@@ -129,7 +145,7 @@ local function misuse(s: any, message: string, level: number): boolean
 end
 
 -- bitsArg: true when bits is an integer in [1, max]; else misuse.
-local function bitsArg(s: any, bits: any, max: number, message: string): boolean
+local function bitsArg(s: StreamState, bits: any, max: number, message: string): boolean
 	if not isInteger(bits, 1, max) then
 		return misuse(s, message, 3)
 	end
@@ -137,7 +153,7 @@ local function bitsArg(s: any, bits: any, max: number, message: string): boolean
 end
 
 -- needDecl: need, for a declaration: misuse on a read refuses, never raises.
-local function needDecl(s: any, cond: boolean, method: string, name: string, kind: string): boolean
+local function needDecl(s: StreamState, cond: boolean, method: string, name: string, kind: string): boolean
 	if not cond then
 		return misuse(s, "serialize: " .. method .. " " .. name .. " must be " .. kind, 3)
 	end
@@ -145,7 +161,7 @@ local function needDecl(s: any, cond: boolean, method: string, name: string, kin
 end
 
 -- wideDecl: wideArg, for a declaration: the limbs, or nil after misuse.
-local function wideDecl(s: any, C: any, x: any, method: string, name: string): { number }?
+local function wideDecl(s: StreamState, C: any, x: any, method: string, name: string): { number }?
 	local ok = if type(x) == "number" then x == math.floor(x) and (C.signed or x >= 0) else C.is(x)
 	if not ok then
 		misuse(s, "serialize: " .. method .. " " .. name .. " must be " .. C.name .. " or an integer-valued number", 3)
@@ -162,39 +178,39 @@ end
 
 local Shared: any = {}
 
-function Shared.isWriting(self: any): boolean
+function Shared.isWriting(self: StreamState): boolean
 	return self._kind ~= "read"
 end
 
-function Shared.isReading(self: any): boolean
+function Shared.isReading(self: StreamState): boolean
 	return self._kind == "read"
 end
 
 -- error returns the first refusal latched on the stream, a Refusal reason
 -- (or, after serializeObject, the object's own error value), or nil.
-function Shared.error(self: any): any
+function Shared.error(self: StreamState): any
 	return self._error
 end
 
-function Shared.ok(self: any): boolean
+function Shared.ok(self: StreamState): boolean
 	return self._error == nil
 end
 
-function Shared.bitsProcessed(self: any): number
+function Shared.bitsProcessed(self: StreamState): number
 	return self._bits
 end
 
 -- bytesProcessed: the bits processed rounded up to a byte; after a write, the
 -- packet size (STANDARD.md, Flush).
-function Shared.bytesProcessed(self: any): number
+function Shared.bytesProcessed(self: StreamState): number
 	return (self._bits + 7) // 8
 end
 
-function Shared.setContext(self: any, context: any)
+function Shared.setContext(self: StreamState, context: any)
 	self._context = context
 end
 
-function Shared.context(self: any): any
+function Shared.context(self: StreamState): any
 	return self._context
 end
 
@@ -209,7 +225,7 @@ local TRAP: { [string]: string } = {
 	non_finite_float = "serialize: a float or double value must be finite",
 }
 
-function Shared._fail(self: any, kind: any): boolean
+function Shared._fail(self: StreamState, kind: any): boolean
 	if self._kind ~= "read" then
 		error(TRAP[kind] or ("serialize: write misuse (" .. tostring(kind) .. ")"), 3)
 	end
@@ -220,11 +236,11 @@ function Shared._fail(self: any, kind: any): boolean
 end
 
 -- _room: true when n more bits fit (a measure stream always has room).
-function Shared._room(self: any, n: number): boolean
+function Shared._room(self: StreamState, n: number): boolean
 	return self._bits + n <= self._numBits
 end
 
-function Shared.alignBits(self: any): number
+function Shared.alignBits(self: StreamState): number
 	if self._kind == "measure" then
 		return 7
 	end
@@ -234,7 +250,7 @@ end
 -- The primitives below run only after every check has passed.
 
 -- _put writes the low n bits of value (masked by the caller), n in [0, 32].
-function Shared._put(self: any, value: number, n: number)
+function Shared._put(self: StreamState, value: number, n: number)
 	if n == 0 then
 		return
 	end
@@ -247,7 +263,7 @@ end
 -- _putWide writes the low n bits of limbs, n in [0, 32 * #limbs], least
 -- significant limb first (STANDARD.md bits: the low 32 bits first; uint128:
 -- the low half first). The bits are the same however the value is split.
-function Shared._putWide(self: any, limbs: { number }, n: number)
+function Shared._putWide(self: StreamState, limbs: { number }, n: number)
 	if self._kind == "measure" then
 		self._bits += n -- a measure never looks at the value
 		return
@@ -262,7 +278,7 @@ function Shared._putWide(self: any, limbs: { number }, n: number)
 end
 
 -- _get reads n bits in [0, 32] as a number.
-function Shared._get(self: any, n: number): number
+function Shared._get(self: StreamState, n: number): number
 	if n == 0 then
 		return 0
 	end
@@ -272,7 +288,7 @@ function Shared._get(self: any, n: number): number
 end
 
 -- _getWide reads n bits into count limbs, least significant first.
-function Shared._getWide(self: any, n: number, count: number): { number }
+function Shared._getWide(self: StreamState, n: number, count: number): { number }
 	local limbs = table.create(count, 0)
 	local i = 1
 	while n > 0 do
@@ -289,7 +305,7 @@ end
 
 -- fixedWidth runs a no-parameter method of width n: write the masked value,
 -- read it, or measure n.
-local function fixedWidth(s: any, n: number, writeValue: () -> number): (boolean, number?)
+local function fixedWidth(s: StreamState, n: number, writeValue: () -> number): (boolean, number?)
 	if s._error ~= nil then
 		return false, nil
 	end
@@ -303,7 +319,7 @@ local function fixedWidth(s: any, n: number, writeValue: () -> number): (boolean
 	return true, nil
 end
 
-function Shared.serializeBits(self: any, h: any, bits: number): boolean
+function Shared.serializeBits(self: StreamState, h: any, bits: number): boolean
 	if not bitsArg(self, bits, 32, RAISE_BITS_RANGE) then
 		return false
 	end
@@ -321,7 +337,7 @@ function Shared.serializeBits(self: any, h: any, bits: number): boolean
 	return ok
 end
 
-function Shared.serializeBits64(self: any, h: any, bits: number): boolean
+function Shared.serializeBits64(self: StreamState, h: any, bits: number): boolean
 	if not bitsArg(self, bits, 64, RAISE_BITS_RANGE64) then
 		return false
 	end
@@ -345,7 +361,7 @@ function Shared.serializeBits64(self: any, h: any, bits: number): boolean
 	return true
 end
 
-function Shared.serializeBool(self: any, h: any): boolean
+function Shared.serializeBool(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "boolean", "serializeBool", "value", "a boolean")
 	end
@@ -359,7 +375,7 @@ function Shared.serializeBool(self: any, h: any): boolean
 end
 
 local function uintMethod(bits: number, name: string)
-	return function(self: any, h: any): boolean
+	return function(self: StreamState, h: any): boolean
 		if self._kind ~= "read" then
 			uintArg(h.value, bits, name, "value")
 		end
@@ -379,7 +395,7 @@ Shared.serializeUint32 = uintMethod(32, "serializeUint32")
 
 -- wideFixed: a fixed-width wide method (uint64, uint128, the double bits).
 local function wideFixed(C: any, bits: number, name: string)
-	return function(self: any, h: any): boolean
+	return function(self: StreamState, h: any): boolean
 		local limbs: { number }
 		if self._kind ~= "read" then
 			limbs = wideArg(C, h.value, name, "value")
@@ -406,7 +422,7 @@ Shared.serializeUint128 = wideFixed(Uint128, 128, "serializeUint128")
 -- Ranged integers (STANDARD.md int, int64, int128): the offset from min in
 -- the bit length of max - min, computed in the unsigned domain.
 
-function Shared.serializeInt(self: any, h: any, min: number, max: number): boolean
+function Shared.serializeInt(self: StreamState, h: any, min: number, max: number): boolean
 	-- int bounds are int32, judged on the caller's own values (U5); min <= max
 	if not needDecl(self, isInteger(min, -2147483648, 2147483647), "serializeInt", "min", "an int32") then
 		return false
@@ -447,7 +463,7 @@ end
 -- ranged: int64 and int128, the same rule over n limbs.
 local function ranged(C: any, name: string)
 	local n = C.limbs
-	return function(self: any, h: any, min: any, max: any): boolean
+	return function(self: StreamState, h: any, min: any, max: any): boolean
 		local lo = wideDecl(self, C, min, name, "min")
 		if lo == nil then
 			return false
@@ -496,7 +512,7 @@ Shared.serializeInt128 = ranged(Int128, "serializeInt128")
 
 -- fixedParams returns the raw minimum and raw range as limbs of the storage
 -- width (2 or 4) and the bit count, or nil after misuse (a read refuses).
-local function fixedParams(s: any, width: number, integerBits: any, fractionBits: any, min: any, max: any, name: string): ({ number }?, { number }?, number)
+local function fixedParams(s: StreamState, width: number, integerBits: any, fractionBits: any, min: any, max: any, name: string): ({ number }?, { number }?, number)
 	if not needDecl(s, isInteger(integerBits, -2147483648, 2147483647), name, "integerBits", "an integer") then
 		return nil, nil, 0
 	end
@@ -558,7 +574,7 @@ local function fixedParams(s: any, width: number, integerBits: any, fractionBits
 end
 
 local function fixedMethod(C: any, width: number, name: string)
-	return function(self: any, h: any, integerBits: number, fractionBits: number, min: any, max: any): boolean
+	return function(self: StreamState, h: any, integerBits: number, fractionBits: number, min: any, max: any): boolean
 		local rawMinOrNil, rawRangeOrNil, bits = fixedParams(self, width, integerBits, fractionBits, min, max, name)
 		if rawMinOrNil == nil or rawRangeOrNil == nil then
 			return false
@@ -600,7 +616,7 @@ Shared.serializeFixed128 = fixedMethod(Int128, 4, "serializeFixed128")
 -- value is -2^63 (the one Q48.16 pattern with no moo number) is refused.
 local MAX_NUMBER_UNITS = { 4294967295, 32767 } -- 2^47 - 1 whole units, the largest moo integer
 
-function Shared.serializeFixedNumber(self: any, h: any, min: any, max: any): boolean
+function Shared.serializeFixedNumber(self: StreamState, h: any, min: any, max: any): boolean
 	-- the bounds must be moo numbers: an unsigned Q48.16 holds whole units to
 	-- 2^48 - 1, whose raw values past 2^63 have no moo number (and would read
 	-- back as negative numbers)
@@ -645,7 +661,7 @@ end
 local INT_RELATIVE_MAX = 2147483647
 local INT_RELATIVE_BOUNDED_MAX = 69914 -- the last bounded tier's top difference
 
-function Shared.serializeIntRelative(self: any, previous: number, h: any): boolean
+function Shared.serializeIntRelative(self: StreamState, previous: number, h: any): boolean
 	-- previous's domain is judged before anything narrows it (U16)
 	if not isInteger(previous, 0, 2147483647) then
 		return misuse(self, RAISE_INT_RELATIVE_DOMAIN, 2)
@@ -763,7 +779,7 @@ local function doubleBitsAreFinite(hi: number): boolean
 	return bit32.band(hi, F64_EXPONENT_HI) ~= F64_EXPONENT_HI
 end
 
-function Shared.serializeFloatBits(self: any, h: any): boolean
+function Shared.serializeFloatBits(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		uintArg(h.value, 32, "serializeFloatBits", "value")
 	end
@@ -788,7 +804,7 @@ function Shared.serializeFloatBits(self: any, h: any): boolean
 	return true
 end
 
-function Shared.serializeDoubleBits(self: any, h: any): boolean
+function Shared.serializeDoubleBits(self: StreamState, h: any): boolean
 	local limbs: { number }
 	if self._kind ~= "read" then
 		limbs = wideArg(Uint64, h.value, "serializeDoubleBits", "value")
@@ -814,7 +830,7 @@ function Shared.serializeDoubleBits(self: any, h: any): boolean
 	return true
 end
 
-function Shared.serializeFloat(self: any, h: any): boolean
+function Shared.serializeFloat(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "number", "serializeFloat", "value", "a number")
 		return Shared.serializeFloatBits(self, { value = Float.toFloatBits(h.value) })
@@ -831,7 +847,7 @@ function Shared.serializeFloat(self: any, h: any): boolean
 	return true
 end
 
-function Shared.serializeDouble(self: any, h: any): boolean
+function Shared.serializeDouble(self: StreamState, h: any): boolean
 	if self._kind ~= "read" then
 		need(type(h.value) == "number", "serializeDouble", "value", "a number")
 		local lo, hi = Float.toDoubleBits(h.value)
@@ -893,7 +909,7 @@ end
 
 -- compressed runs the shared arm. valueBits is the value to write as float32
 -- bits (write only); the read returns the decoded float32 bits.
-local function compressed(s: any, valueBits: number?, maxIntegerValue: number, bits: number, delta: number, min: number): (boolean, number?)
+local function compressed(s: StreamState, valueBits: number?, maxIntegerValue: number, bits: number, delta: number, min: number): (boolean, number?)
 	-- a declaration whose top integer decodes to a value that is not finite
 	-- (min + delta, rounded once) is non-conforming as a whole (STANDARD.md
 	-- compressed_float, The decode must be finite): write misuse, trapped on
@@ -947,7 +963,7 @@ end
 -- compressedValue: the value to write as float32 bits. The Bits form must be
 -- finite (IMPLEMENTING.md, The check model: a compressed_float value that is
 -- not finite is misuse); a number always is.
-local function compressedValue(s: any, h: any, asBits: boolean, name: string): number?
+local function compressedValue(s: StreamState, h: any, asBits: boolean, name: string): number?
 	if s._kind == "read" then
 		return nil
 	end
@@ -963,7 +979,7 @@ local function compressedValue(s: any, h: any, asBits: boolean, name: string): n
 end
 
 local function compressedMethod(asBits: boolean, precomputed: boolean, name: string)
-	return function(self: any, h: any, a: any, b: any, c: any, d: any): boolean
+	return function(self: StreamState, h: any, a: any, b: any, c: any, d: any): boolean
 		local maxIntegerValue: number, bits: number, delta: number, min: number
 		-- every declaration is checked before any bits move; on a read a bad
 		-- one is refused (U7, U16)
@@ -1026,7 +1042,7 @@ Shared.serializeCompressedFloatPrecomputedBits = compressedMethod(true, true, "s
 -- ---------------------------------------------------------------------------
 -- align, bytes, string, end (STANDARD.md align, bytes, string, end).
 
-function Shared.serializeAlign(self: any): boolean
+function Shared.serializeAlign(self: StreamState): boolean
 	if self._kind == "measure" then
 		self._bits += 7
 		return true
@@ -1054,7 +1070,7 @@ end
 -- serializeBytes(data[, offset, count]): aligns, then copies count bytes of
 -- the buffer (all of it by default); a read fills them. Both sides know the
 -- length: it is not sent.
-function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: number?): boolean
+function Shared.serializeBytes(self: StreamState, data: buffer, offset: number?, count: number?): boolean
 	-- the destination's own capacity bounds the declaration; on a read a range
 	-- outside it, a negative count included, is refused (U7, U16)
 	if not needDecl(self, type(data) == "buffer", "serializeBytes", "data", "a buffer") then
@@ -1087,7 +1103,7 @@ function Shared.serializeBytes(self: any, data: buffer, offset: number?, count: 
 	return true
 end
 
-local function bufferSizeArg(s: any, bufferSize: any): boolean
+local function bufferSizeArg(s: StreamState, bufferSize: any): boolean
 	if not isInteger(bufferSize, 1, 2147483647) then
 		return misuse(s, RAISE_BUFFER_SIZE, 3)
 	end
@@ -1146,7 +1162,7 @@ end
 -- claimed length against the bytes that remain before it reads them, then
 -- refuses a zero byte (embedded_nul) BEFORE it checks the encoding
 -- (invalid_utf8), so a payload breaking both is embedded_nul.
-function Shared.serializeString(self: any, h: any, bufferSize: number): boolean
+function Shared.serializeString(self: StreamState, h: any, bufferSize: number): boolean
 	if not bufferSizeArg(self, bufferSize) then
 		return false
 	end
@@ -1219,7 +1235,7 @@ end
 -- read stream it is refused with the first refusal's reason. On a write or a
 -- measure it is a no-op returning true, whatever the stream's state (U12): it
 -- emits nothing and costs nothing.
-function Shared.serializeEnd(self: any): boolean
+function Shared.serializeEnd(self: StreamState): boolean
 	if self._kind ~= "read" then
 		return true
 	end
@@ -1244,7 +1260,7 @@ end
 -- U2). It goes through the one latch, so a reason a primitive inside the
 -- object latched first is kept.
 
-function Shared.serializeObject(self: any, object: any): boolean
+function Shared.serializeObject(self: StreamState, object: any): boolean
 	local method: any = if type(object) == "table" then object.serialize else nil
 	if type(method) ~= "function" then
 		return misuse(self, RAISE_NOT_AN_OBJECT, 2)
@@ -1269,7 +1285,7 @@ end
 -- `return stream:reject()`. It is read only: on a write or a measure there is
 -- nothing to refuse, and calling it there is API misuse, which raises as every
 -- other misuse does (IMPLEMENTING.md U9: moo is always checked).
-function Shared.reject(self: any): boolean
+function Shared.reject(self: StreamState): boolean
 	if self._kind ~= "read" then
 		error(RAISE_REJECT_NOT_READ, 2)
 	end
@@ -1296,7 +1312,7 @@ local function refusalName(reason: any): string
 end
 
 -- refusal(): the stream's refusal name, or "none" (U14).
-function Shared.refusal(self: any): string
+function Shared.refusal(self: StreamState): string
 	return refusalName(self._error)
 end
 
@@ -1305,7 +1321,7 @@ end
 -- closed list, latches rejected (never none: a refused stream that reported
 -- none would be relabelled past_end by the next read). On a write or a measure
 -- it records nothing and returns false (U6, U9).
-function Shared.fail(self: any, reason: any?): boolean
+function Shared.fail(self: StreamState, reason: any?): boolean
 	if self._kind ~= "read" then
 		return false
 	end
@@ -1333,7 +1349,7 @@ function WriteStream.new(buf: buffer): any
 	return self
 end
 
-function WriteStream.reset(self: any, buf: buffer)
+function WriteStream.reset(self: StreamState, buf: buffer)
 	if type(buf) ~= "buffer" or buffer.len(buf) % 8 ~= 0 then
 		error(RAISE_BUFFER_BYTES, 2)
 	end
@@ -1344,17 +1360,17 @@ function WriteStream.reset(self: any, buf: buffer)
 	self._error = nil
 end
 
-function WriteStream.bitsAvailable(self: any): number
+function WriteStream.bitsAvailable(self: StreamState): number
 	return self._numBits - self._bits
 end
 
 -- flush stores the partial word (STANDARD.md, Flush). Call it before data.
-function WriteStream.flush(self: any)
+function WriteStream.flush(self: StreamState)
 	self._packer:flushBits()
 end
 
 -- data returns the written bytes, bytesProcessed() of them, as a fresh buffer.
-function WriteStream.data(self: any): buffer
+function WriteStream.data(self: StreamState): buffer
 	local n = self:bytesProcessed()
 	local out = buffer.create(n)
 	if n > 0 then
@@ -1375,7 +1391,7 @@ end
 -- latched error (STANDARD.md: a failure persists until re-initialization).
 -- Data that is not a buffer is caller misuse on a read: the stream starts
 -- refused as value_out_of_range over no bytes, never a raise (U7).
-function ReadStream.reset(self: any, data: buffer)
+function ReadStream.reset(self: StreamState, data: buffer)
 	if type(data) ~= "buffer" then
 		self._numBits = 0
 		self._bits = 0
@@ -1397,7 +1413,7 @@ function MeasureStream.new(): any
 	return self
 end
 
-function MeasureStream.reset(self: any)
+function MeasureStream.reset(self: StreamState)
 	self._numBits = math.huge
 	self._bits = 0
 	self._error = nil
@@ -1405,14 +1421,14 @@ end
 
 -- Continue / Until (serialize.go): sentinel loops that stop at the first
 -- error, so they always end on hostile data.
-local function Continue(stream: any, more: Holder<boolean>): boolean
+local function Continue(stream: StreamState, more: Holder<boolean>): boolean
 	if not stream:serializeBool(more) then
 		return false
 	end
 	return more.value
 end
 
-local function Until(stream: any, done: Holder<boolean>): boolean
+local function Until(stream: StreamState, done: Holder<boolean>): boolean
 	if not stream:serializeBool(done) then
 		return false
 	end
