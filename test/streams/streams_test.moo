@@ -25,33 +25,33 @@ end
 
 -- message writes, reads and measures one object with every field kind
 local function message(s: any, v: any): boolean
-	s:serializeBits(v.bits, 13)
-	s:serializeBits64(v.bits64, 45)
-	s:serializeInt(v.int, -100, 100)
-	s:serializeInt64(v.int64, Int64.parse("-9223372036854775808"), Int64.parse("9223372036854775807"))
-	s:serializeInt128(v.int128, -1000, Int128.parse("100000000000000000000000"))
-	s:serializeUint128(v.uint128)
-	s:serializeFixed64(v.fixed64, 16, 16, -100, 100)
-	s:serializeFixed128(v.fixed128, 112, 16, -5, 5)
-	s:serializeFixedNumber(v.number, -1000, 1000)
-	s:serializeUint8(v.u8)
-	s:serializeUint16(v.u16)
-	s:serializeUint32(v.u32)
-	s:serializeUint64(v.u64)
-	s:serializeBool(v.bool)
-	s:serializeFloat(v.float)
-	s:serializeDouble(v.double)
-	s:serializeFloatBits(v.floatBits)
-	s:serializeDoubleBits(v.doubleBits)
-	s:serializeCompressedFloat(v.cf, -10, 10, Float32.parse("0.01"))
-	s:serializeAlign()
-	s:serializeString(v.str, 64)
-	s:serializeIntRelative(100, v.rel)
-	s:serializeIntRelative(100, v.far)
-	s:serializeBytes(v.bytes)
-	s:serializeBits(v.tail, 3)
-	s:serializeEnd()
-	return s:ok()
+	local ok = s:serializeBits(v.bits, 13)
+	ok = s:serializeBits64(v.bits64, 45) and ok
+	ok = s:serializeInt(v.int, -100, 100) and ok
+	ok = s:serializeInt64(v.int64, Int64.parse("-9223372036854775808"), Int64.parse("9223372036854775807")) and ok
+	ok = s:serializeInt128(v.int128, -1000, Int128.parse("100000000000000000000000")) and ok
+	ok = s:serializeUint128(v.uint128) and ok
+	ok = s:serializeFixed64(v.fixed64, 16, 16, -100, 100) and ok
+	ok = s:serializeFixed128(v.fixed128, 112, 16, -5, 5) and ok
+	ok = s:serializeFixedNumber(v.number, -1000, 1000) and ok
+	ok = s:serializeUint8(v.u8) and ok
+	ok = s:serializeUint16(v.u16) and ok
+	ok = s:serializeUint32(v.u32) and ok
+	ok = s:serializeUint64(v.u64) and ok
+	ok = s:serializeBool(v.bool) and ok
+	ok = s:serializeFloat(v.float) and ok
+	ok = s:serializeDouble(v.double) and ok
+	ok = s:serializeFloatBits(v.floatBits) and ok
+	ok = s:serializeDoubleBits(v.doubleBits) and ok
+	ok = s:serializeCompressedFloat(v.cf, -10, 10, Float32.parse("0.01")) and ok
+	ok = s:serializeAlign() and ok
+	ok = s:serializeString(v.str, 64) and ok
+	ok = s:serializeIntRelative(100, v.rel) and ok
+	ok = s:serializeIntRelative(100, v.far) and ok
+	ok = s:serializeBytes(v.bytes) and ok
+	ok = s:serializeBits(v.tail, 3) and ok
+	ok = s:serializeEnd() and ok
+	return ok and s:ok()
 end
 
 local function values(): any
