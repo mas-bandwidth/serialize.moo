@@ -88,7 +88,8 @@ Every stream also has `reset`, `isWriting`, `isReading`, `error`, `ok`,
 `setContext`, `context`; a WriteStream has `flush`, `data` and
 `bitsAvailable`. `reset` re-initializes a stream and clears its latch (U13).
 A WriteStream's buffer is unspecified until `flush`, which is required
-before `data` (U11).
+before `data` (U11). Flush ends the write: a write after a flush that stored
+a partial word raises before any bit is written (U11, U9), until `reset`.
 
 `stream:refusal()` is the latched reason's name, or `"none"` (U14); an
 object's own error value, which `error()` returns as given, is named

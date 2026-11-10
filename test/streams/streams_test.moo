@@ -341,9 +341,10 @@ function T.TestConveniencesMatchTwinsAtEveryOffset()
 	end
 end
 
--- a write goes on after flush: flush stores the partial word without moving
--- the stream, so a later write and a second flush give the bytes of one
--- uninterrupted write
+-- flush moves nothing and a second flush stores the same bytes. A flush that
+-- stored a partial word ends the write, so a later write traps and writes
+-- nothing (IMPLEMENTING.md U11); a flush at a 64-bit boundary stored nothing,
+-- and a later write and flush give the bytes of one uninterrupted write.
 function T.TestWriteAfterFlush()
 	local once = serialize.WriteStream.new(buffer.create(16))
 	check(once:serializeBits({ value = 0xABC }, 12) and once:serializeBits({ value = 0x12345 }, 20) and once:serializeBits({ value = 0x2F }, 7), "one run")
@@ -352,12 +353,22 @@ function T.TestWriteAfterFlush()
 	check(twice:serializeBits({ value = 0xABC }, 12), "before the first flush")
 	twice:flush()
 	check(twice:bitsProcessed() == 12 and twice:bitsAvailable() == 116, "flush moves nothing")
-	check(twice:serializeBits({ value = 0x12345 }, 20), "after the first flush")
 	twice:flush()
-	check(twice:serializeBits({ value = 0x2F }, 7), "after the second flush, into the next word")
-	twice:flush()
-	check(twice:bitsProcessed() == 39, "39 bits")
-	check(buffer.tostring(twice:data()) == buffer.tostring(once:data()), "the bytes of one uninterrupted write")
+	check(buffer.tostring(twice:data()) == "\xBC\x0A", "a second flush stores the same bytes")
+	raises(function()
+		twice:serializeBits({ value = 0x12345 }, 20)
+	end, "after a flush")
+	check(twice:bitsProcessed() == 12, "the trapped write wrote nothing")
+	local whole = serialize.WriteStream.new(buffer.create(16))
+	check(whole:serializeBits({ value = 0xABC }, 12) and whole:serializeBits({ value = 0x12345 }, 20) and whole:serializeBits({ value = 0x2F }, 32) and whole:serializeBits({ value = 0x2F }, 7), "one run past a word")
+	whole:flush()
+	local split = serialize.WriteStream.new(buffer.create(16))
+	check(split:serializeBits({ value = 0xABC }, 12) and split:serializeBits({ value = 0x12345 }, 20) and split:serializeBits({ value = 0x2F }, 32), "a whole 64-bit word")
+	split:flush()
+	check(split:serializeBits({ value = 0x2F }, 7), "after a flush at the word boundary, into the next word")
+	split:flush()
+	check(split:bitsProcessed() == 71, "71 bits")
+	check(buffer.tostring(split:data()) == buffer.tostring(whole:data()), "the bytes of one uninterrupted write")
 end
 
 -- bitsAvailable: the room left in a write buffer, in bits

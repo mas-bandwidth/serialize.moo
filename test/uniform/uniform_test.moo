@@ -267,6 +267,50 @@ function T.TestU11FlushStoresTheLastWord()
 	check(buffer.len(d) == 2 and buffer.readu8(d, 0) == 0xBC and buffer.readu8(d, 1) == 0x0A, "flush stored the partial word")
 end
 
+-- U11. Flush ends the write: a write after a flush that stored a partial word
+-- is write misuse (U9), trapped on every write path before a bit is written.
+-- A flush at a 64-bit boundary stores nothing, and reset starts a new write.
+function T.TestU11WriteAfterFlushTraps()
+	local paths: { { any } } = {
+		{ "serializeBits", function(w) w:serializeBits({ value = 1 }, 4) end },
+		{ "serializeBits64", function(w) w:serializeBits64({ value = Uint64.fromNumber(1) }, 40) end },
+		{ "serializeBool", function(w) w:serializeBool({ value = true }) end },
+		{ "serializeInt", function(w) w:serializeInt({ value = 3 }, 0, 100) end },
+		{ "serializeAlign", function(w) w:serializeAlign() end },
+		{ "serializeBytes", function(w) w:serializeBytes(buffer.create(2)) end },
+		{ "serializeBytes of none", function(w) w:serializeBytes(buffer.create(0)) end },
+		{ "serializeString", function(w) w:serializeString({ value = "ab" }, 8) end },
+		{ "serializeCompressedFloat", function(w) w:serializeCompressedFloat({ value = 1 }, -10, 10, Float32.parse("0.01")) end },
+	}
+	for _, path in paths do
+		local what: string, write: (any) -> () = path[1], path[2]
+		local w = serialize.WriteStream.new(buffer.create(16))
+		check(w:serializeBits({ value = 0x5 }, 3), "three bits")
+		w:flush()
+		traps(w, function() write(w) end, "after a flush", what .. " after a flush that stored a partial word")
+		check(w:bitsProcessed() == 3, what .. ": the trapped write wrote " .. (w:bitsProcessed() - 3) .. " bits")
+		w:flush()
+		check(buffer.tostring(w:data()) == "\x05", what .. ": the flushed bytes are unchanged")
+	end
+	local bw = serialize.BitWriter.new(buffer.create(16))
+	bw:writeBits(1, 8)
+	bw:flushBits()
+	raises(function() bw:writeBits(1, 1) end, "after a flush")
+	raises(function() bw:writeBytes(buffer.create(2)) end, "after a flush")
+	raises(function() bw:writeBytes(buffer.create(0)) end, "after a flush")
+	check(bw:bitsWritten() == 8, "the BitWriter wrote nothing after its flush")
+	-- a flush at a 64-bit boundary stored no partial word: the write goes on
+	local w = serialize.WriteStream.new(buffer.create(16))
+	check(w:serializeBits64({ value = Uint64.fromNumber(0) }, 64), "64 bits")
+	w:flush()
+	check(w:serializeBits({ value = 0xAB }, 8) and w:bitsProcessed() == 72, "a write after a flush that stored nothing")
+	-- a second flush is not a write; reset starts a new write
+	w:flush()
+	w:flush()
+	w:reset(buffer.create(8))
+	check(w:serializeBits({ value = 1 }, 1), "reset after a flush clears it")
+end
+
 -- U12. end on a write or measure is a no-op returning true, whatever the
 -- stream's state.
 function T.TestU12EndOnWriteAndMeasureIsANoOp()

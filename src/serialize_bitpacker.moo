@@ -25,6 +25,7 @@ local RAISE_BUFFER_BYTES = "serialize: bit writer buffer size must be a multiple
 local RAISE_READ_DST = "serialize: bit reader destination buffer too small"
 local RAISE_WRITE_BYTES_RANGE = "serialize: writeBytes offset and count must be a range inside the buffer"
 local RAISE_READ_BYTES_RANGE = "serialize: readBytes offset and count must be a range inside the buffer"
+local RAISE_AFTER_FLUSH = "serialize: bit writer write after a flush that stored a partial word"
 
 -- The state a bit writer or reader carries. A writer sets the scratch and the
 -- written count, a reader the read count; the metatable supplies the methods.
@@ -35,6 +36,7 @@ export type BitState = {
 	_scratchBits: number,
 	_word: number,
 	_bitsWritten: number,
+	_flushed: boolean,
 	_bitsRead: number,
 	[string]: any,
 }
@@ -82,6 +84,7 @@ function BitWriter.reset(self: BitState, buf: buffer)
 	self._scratchBits = 0
 	self._word = 0 -- the index of the next 32-bit word to store
 	self._bitsWritten = 0
+	self._flushed = false -- a flush stored a partial word: the write has ended (U11)
 end
 
 function BitWriter.new(buf: buffer): BitState
@@ -91,8 +94,13 @@ function BitWriter.new(buf: buffer): BitState
 end
 
 -- _pack writes the low bits of value, already masked to bits in [1, 32] and
--- already bounds checked.
+-- already bounds checked. Every write reaches the buffer through _pack or
+-- _copy, so both trap a write after a flush that stored a partial word
+-- (IMPLEMENTING.md U11, U9), before a bit is written.
 function BitWriter._pack(self: BitState, value: number, bits: number)
+	if self._flushed then
+		error(RAISE_AFTER_FLUSH, 3)
+	end
 	local s = self._scratchBits
 	if s + bits < 32 then
 		self._scratch += value * POW2[s]
@@ -130,6 +138,9 @@ end
 -- checked: head bytes through the scratch to a 32-bit boundary, the middle by
 -- buffer.copy (the scratch is empty there), the tail through the scratch.
 function BitWriter._copy(self: BitState, src: buffer, offset: number, count: number)
+	if self._flushed then
+		error(RAISE_AFTER_FLUSH, 3)
+	end
 	local i = 0
 	while i < count and self._scratchBits ~= 0 do
 		self:_pack(buffer.readu8(src, offset + i), 8)
@@ -163,14 +174,16 @@ function BitWriter.writeBytes(self: BitState, src: buffer, offset: number?, coun
 end
 
 -- flushBits stores the partial word and zeroes the rest of its 8-byte word,
--- the bytes serialize.go's 64-bit store leaves (STANDARD.md, Flush). It
--- changes no state, so a second flush stores the same bytes.
+-- the bytes serialize.go's 64-bit store leaves (STANDARD.md, Flush). A second
+-- flush stores the same bytes. A flush that stored a partial word ends the
+-- write: a later write traps (U11) until reset.
 function BitWriter.flushBits(self: BitState)
 	if self._bitsWritten % 64 ~= 0 then
 		buffer.writeu32(self._data, self._word * 4, self._scratch)
 		if self._word % 2 == 0 then
 			buffer.writeu32(self._data, self._word * 4 + 4, 0)
 		end
+		self._flushed = true
 	end
 end
 
