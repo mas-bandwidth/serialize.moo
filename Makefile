@@ -23,6 +23,12 @@ MOO_PIN    := f60f0239f41c6c0a827ecee44a7f9539c5798068
 MOO_DIST   := $(CURDIR)/dist/moo
 MOO        ?= $(MOO_DIST)/moo
 MOO_ANALYZE ?= $(MOO_DIST)/moo-analyze
+# -j1: moo-analyze at this pin corrupts its heap now and then when it checks
+# modules on its default worker threads (min(cores, 8)); macOS reports
+# "memory corruption of free block" under Luau::ConstraintGenerator and the
+# run dies with SIGTRAP or SIGABRT, on about 1 run in 80 here. One thread
+# checks the same modules with the same verdicts and has not crashed.
+MOO_ANALYZE_FLAGS ?= -j1
 MOO_CHECKED_DIST := $(CURDIR)/dist/moo-checked
 MOO_CHECKED ?= $(MOO_CHECKED_DIST)/moo
 MOO_CHECKED_FLAGS := -DCMAKE_BUILD_TYPE=Release -DMOO_OVERFLOW_ERRORS=ON
@@ -100,7 +106,7 @@ lint:
 	@sh tools/check-ci.sh
 
 analyze: toolchain
-	@$(MOO_ANALYZE) src/*.moo
+	@$(MOO_ANALYZE) $(MOO_ANALYZE_FLAGS) src/*.moo
 	@rm -rf build/analyze && mkdir -p build/analyze
 	@for dir in test/*/; do \
 		name=$$(basename "$$dir"); \
@@ -112,7 +118,7 @@ analyze: toolchain
 		printf -- '--!strict\nreturn table.freeze({})\n' > "$$unit/inputs.moo"; \
 		for test in "$$unit"/*_test.moo; do \
 			[ -e "$$test" ] || continue; \
-			$(MOO_ANALYZE) "$$test" || exit 1; \
+			$(MOO_ANALYZE) $(MOO_ANALYZE_FLAGS) "$$test" || exit 1; \
 		done; \
 	done
 
@@ -152,7 +158,7 @@ fuzz-analyze: toolchain
 	@rm -rf build/fuzz-analyze && mkdir -p build/fuzz-analyze
 	@cp src/*.moo fuzz/driver.moo build/fuzz-analyze/
 	@printf -- '--!strict\nreturn ""\n' > build/fuzz-analyze/inputs.moo
-	@$(MOO_ANALYZE) build/fuzz-analyze/driver.moo
+	@$(MOO_ANALYZE) $(MOO_ANALYZE_FLAGS) build/fuzz-analyze/driver.moo
 
 fuzz: fuzz-analyze
 	@rm -rf $(FUZZ_FAILURES)
@@ -242,7 +248,7 @@ bench: toolchain
 	@cp src/*.moo $(BENCH_DIR)/
 	@printf '%s\n' "$$BENCH_SRC" | sed 's/@PACKETS@/0/' > $(BENCH_DIR)/empty.moo
 	@printf '%s\n' "$$BENCH_SRC" | sed 's/@PACKETS@/$(BENCH_PACKETS)/' > $(BENCH_DIR)/bench.moo
-	@$(MOO_ANALYZE) $(BENCH_DIR)/bench.moo
+	@$(MOO_ANALYZE) $(MOO_ANALYZE_FLAGS) $(BENCH_DIR)/bench.moo
 	@echo "bench: $(BENCH_PACKETS) packets written and read back per run, $(BENCH_RUNS) runs, moo $(MOO_PIN)"
 	@run=1; while [ $$run -le $(BENCH_RUNS) ]; do \
 		t0=$$(date +%s%N); $(MOO) $(BENCH_DIR)/empty.moo >/dev/null || exit 1; \
