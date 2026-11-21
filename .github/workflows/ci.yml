@@ -11,12 +11,20 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # GitHub evicts a cache nobody restores for 7 days, and the fleet kills a
+  # push or pull_request job at 2 minutes: a cold build of the checked moo
+  # (about 95 s on an idle bench) does not fit beside other work, so a pull
+  # request after a quiet week went red. The nightly run keeps the main
+  # branch's caches restored, and a schedule or workflow_dispatch run has no
+  # fleet time limit, so a new pin or new flags are built there.
+  schedule:
+    - cron: '41 5 * * *'   # every day at 05:41 UTC
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || (github.event.pull_request.number || github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +37,9 @@ jobs:
     # a pull request from a fork never runs on them.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, fleet]
-    timeout-minutes: 5
+    # a push or pull_request job is held to 2 minutes by the fleet whatever
+    # this says; a schedule or workflow_dispatch run may build cold
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 30 || 5 }}
     outputs:
       key: ${{ steps.pin.outputs.key }}
     steps:
@@ -166,10 +176,17 @@ jobs:
   test-arm64:
     name: test on the pinned moo (ARM64)
     # The repository is public and these are the fleet's self-hosted runners:
-    # a pull request from a fork never runs on them.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # a pull request from a fork never runs on them. The nightly leaves the Mac
+    # alone: a cold build of the plain moo there fits in the 2-minute limit.
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, ARM64, fleet]
     timeout-minutes: 20
+    # The moo this job builds or restores, by path: the runner's own
+    # environment may name another moo, and make honours MOO and MOO_ANALYZE
+    # from the environment.
+    env:
+      MOO: ${{ github.workspace }}/dist/moo/moo
+      MOO_ANALYZE: ${{ github.workspace }}/dist/moo/moo-analyze
     steps:
       - uses: actions/checkout@v4
         with:
